@@ -1,0 +1,20 @@
+# Audio Pipeline Requirements
+# Standalone requirements for the audio processing pipeline
+
+# Core dependencies
+numpy==1.23.5
+torch==2.2.0
+torchaudio==2.2.0
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.0
+scipy>=1.10.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Optional: for creating test audio
+# (soundfile is already included above)
+
