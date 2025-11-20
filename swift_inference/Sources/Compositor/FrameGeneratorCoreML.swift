@@ -2,11 +2,12 @@ import Foundation
 import CoreML
 import AppKit
 
+// Simple wrapper since we're using the models directly
 @available(macOS 13.0, *)
-class CoreMLFrameGenerator {
+class FrameGeneratorCoreML {
     private let sandersDir: String
-    private let audioEncoder: AudioEncoder
-    private let generator: Generator
+    private let audioEncoderModel: MLModel
+    private let generatorModel: MLModel
     private let cropRectangles: [String: CropRect]
     private let melProcessor: MelProcessor
     
@@ -19,15 +20,15 @@ class CoreMLFrameGenerator {
         
         print("Loading Core ML models...")
         
-        // Load Core ML models
-        let audioEncoderURL = URL(fileURLWithPath: "swift_inference/AudioEncoder.mlpackage")
-        let generatorURL = URL(fileURLWithPath: "swift_inference/Generator.mlpackage")
-        
+        // Load compiled Core ML models
         let config = MLModelConfiguration()
-        config.computeUnits = .all  // Use CPU + GPU + Neural Engine!
+        config.computeUnits = .all  // CPU + GPU + Neural Engine!
         
-        self.audioEncoder = try AudioEncoder(configuration: config)
-        self.generator = try Generator(configuration: config)
+        let audioEncoderURL = URL(fileURLWithPath: "AudioEncoder.mlmodelc", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+        let generatorURL = URL(fileURLWithPath: "Generator.mlmodelc", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+        
+        self.audioEncoderModel = try MLModel(contentsOf: audioEncoderURL, configuration: config)
+        self.generatorModel = try MLModel(contentsOf: generatorURL, configuration: config)
         
         print("✓ Core ML models loaded (Neural Engine enabled!)")
         
@@ -47,12 +48,11 @@ class CoreMLFrameGenerator {
         let startTime = Date()
         
         // Load WAV
-        let wavLoader = try SimpleWAVLoader(path: audioPath)
-        let samples = wavLoader.samples
+        let samples = try SimpleWAVLoader.loadWAV(url: URL(fileURLWithPath: audioPath))
         print("  Loaded: \(samples.count) samples")
         
         // Process mel spectrograms
-        let melSpec = melProcessor.process(audioSamples: samples)
+        let melSpec = melProcessor.process(samples)
         print("  Mel spectrogram: \(melSpec.count) x \(melSpec[0].count)")
         
         // Get frame count
@@ -70,11 +70,17 @@ class CoreMLFrameGenerator {
             // Convert to MLMultiArray shape [1, 1, 80, 16]
             let melArray = try createMLMultiArray(shape: [1, 1, 80, 16], data: flattenMelWindow(melWindow))
             
-            // Run audio encoder (Core ML!)
-            let input = AudioEncoderInput(mel: melArray)
-            let output = try audioEncoder.prediction(input: input)
+            // Run audio encoder
+            let input = try MLDictionaryFeatureProvider(dictionary: ["mel_spectrogram": melArray])
+            let output = try audioEncoderModel.prediction(from: input)
             
-            audioFeatures.append(output.emb)
+            // Get output (name is var_242 from model)
+            guard let features = output.featureValue(for: "var_242")?.multiArrayValue else {
+                throw NSError(domain: "FrameGenerator", code: 1, 
+                            userInfo: [NSLocalizedDescriptionKey: "Failed to get audio features"])
+            }
+            
+            audioFeatures.append(features)
             
             if (i + 1) % 100 == 0 {
                 print("  Encoded \(i + 1)/\(numFrames)")
@@ -121,17 +127,25 @@ class CoreMLFrameGenerator {
             let audioIdx = min(i - 1, audioFeatures.count - 1)
             let audioInput = try reshapeAudioFeatures(audioFeatures[audioIdx])
             
-            // Run generator (Core ML on Neural Engine!)
-            let genInput = GeneratorInput(input: imageInput, audio: audioInput)
-            let genOutput = try generator.prediction(input: genInput)
+            // Run generator
+            let genInput = try MLDictionaryFeatureProvider(dictionary: [
+                "visual_input": MLFeatureValue(multiArray: imageInput),
+                "audio_input": MLFeatureValue(multiArray: audioInput)
+            ])
+            let genOutput = try generatorModel.prediction(from: genInput)
+            
+            // Get output (name is var_1677 from model)
+            guard let outputArray = genOutput.featureValue(for: "var_1677")?.multiArrayValue else {
+                throw NSError(domain: "Generator", code: 2)
+            }
             
             // Convert output to image
-            let generatedImage = try mlMultiArrayToImage(genOutput.output, width: 320, height: 320)
+            let generatedImage = try mlMultiArrayToImage(outputArray, width: 320, height: 320)
             
             // Paste into full frame
             let rectKey = String(i - 1)
             guard let cropRect = cropRectangles[rectKey] else {
-                throw NSError(domain: "Generator", code: 2)
+                throw NSError(domain: "Generator", code: 3)
             }
             
             let finalFrame = try pasteIntoFrame(fullBodyImage, generated: generatedImage, rect: cropRect.rect)
@@ -213,10 +227,9 @@ class CoreMLFrameGenerator {
     }
     
     private func concatenateArrays(_ arr1: MLMultiArray, _ arr2: MLMultiArray) throws -> MLMultiArray {
-        // Concatenate along channel dimension [1,3,H,W] + [1,3,H,W] = [1,6,H,W]
         let result = try MLMultiArray(shape: [1, 6, 320, 320] as [NSNumber], dataType: .float32)
         
-        // Copy first 3 channels from arr1
+        // Copy first 3 channels
         for c in 0..<3 {
             for y in 0..<320 {
                 for x in 0..<320 {
@@ -227,7 +240,7 @@ class CoreMLFrameGenerator {
             }
         }
         
-        // Copy next 3 channels from arr2
+        // Copy next 3 channels
         for c in 0..<3 {
             for y in 0..<320 {
                 for x in 0..<320 {
@@ -242,11 +255,10 @@ class CoreMLFrameGenerator {
     }
     
     private func reshapeAudioFeatures(_ features: MLMultiArray) throws -> MLMultiArray {
-        // Input: [1, 512]
-        // Output: [1, 32, 16, 16] = 8192 values
+        // Input: [1, 512], Output: [1, 32, 16, 16]
         let result = try MLMultiArray(shape: [1, 32, 16, 16] as [NSNumber], dataType: .float32)
         
-        // Tile/repeat the 512 values to fill 8192
+        // Tile the 512 values
         for i in 0..<(32*16*16) {
             let srcIdx = i % 512
             result[i] = features[srcIdx]
@@ -256,7 +268,6 @@ class CoreMLFrameGenerator {
     }
     
     private func mlMultiArrayToImage(_ array: MLMultiArray, width: Int, height: Int) throws -> NSImage {
-        // Input: [1, 3, 320, 320] in BGR format, values 0-1
         var pixelData = [UInt8](repeating: 0, count: width * height * 4)
         
         for y in 0..<height {
@@ -344,7 +355,7 @@ class CoreMLFrameGenerator {
         }
         
         let url = URL(fileURLWithPath: path)
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, kUTTypeJPEG, 1, nil) else {
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil) else {
             throw NSError(domain: "Generator", code: 10)
         }
         

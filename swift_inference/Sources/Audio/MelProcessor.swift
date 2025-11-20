@@ -300,5 +300,32 @@ class MelProcessor {
         
         return filterbank
     }
+    
+    // MARK: - Frame extraction methods
+    
+    func cropAudioWindow(melSpec: [[Float]], frameIdx: Int, fps: Double) throws -> [[Float]] {
+        let startIdx = Int(80.0 * (Double(frameIdx) / fps))
+        var endIdx = startIdx + 16
+        
+        if endIdx > melSpec.count {
+            endIdx = melSpec.count
+        }
+        
+        let window = Array(melSpec[startIdx..<endIdx])
+        
+        // Pad if needed
+        if window.count < 16 {
+            var padded = window
+            for _ in 0..<(16 - window.count) {
+                padded.append([Float](repeating: 0, count: melSpec[0].count))
+            }
+            return padded
+        }
+        
+        return window
+    }
+    
+    func getFrameCount(melSpec: [[Float]], fps: Double) -> Int {
+        return Int((Double(melSpec.count) - 16.0) / 80.0 * fps) + 2
+    }
 }
-

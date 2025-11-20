@@ -81,7 +81,7 @@ let startTime = Date()
 do {
     // Create frame generator
     print("\n[1/4] Loading Core ML models...")
-    let generator = try CoreMLFrameGenerator(sandersDir: sandersDir)
+    let generator = try FrameGeneratorCoreML(sandersDir: sandersDir)
     
     // Process audio
     print("\n[2/4] Processing audio with Core ML...")
