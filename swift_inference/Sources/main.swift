@@ -1,10 +1,17 @@
 import Foundation
+import CoreML
+
+// Check macOS version
+guard #available(macOS 13.0, *) else {
+    print("Error: Requires macOS 13.0 or later")
+    exit(1)
+}
 
 // Parse command line arguments
 let args = CommandLine.arguments
 
 var sandersDir = "../model/sanders_full_onnx"
-var audioPath = "../model/sanders_full_onnx/aud.wav"  // Default audio
+var audioPath = ""  // Will default to sanders/aud.wav if not specified
 var outputDir = "../comparison_results/swift_output/frames"
 var numFrames = 250
 
@@ -53,31 +60,38 @@ while i < args.count {
     i += 1
 }
 
+// Set default audio if not specified
+if audioPath.isEmpty {
+    audioPath = "\(sandersDir)/aud.wav"
+}
+
 print("============================================================")
-print("Swift Inference - Sanders Frame Generation")
+print("Swift Core ML Inference - Sanders Frame Generation")
 print("============================================================")
 print("Sanders directory: \(sandersDir)")
 print("Audio file: \(audioPath)")
 print("Output directory: \(outputDir)")
 print("Number of frames: \(numFrames)")
 print("============================================================")
+print("Using Core ML with Neural Engine! 🚀")
+print("============================================================")
 
 let startTime = Date()
 
 do {
     // Create frame generator
-    print("\n[1/4] Loading models...")
-    let generator = try FrameGenerator(sandersDir: sandersDir)
+    print("\n[1/4] Loading Core ML models...")
+    let generator = try CoreMLFrameGenerator(sandersDir: sandersDir)
     
     // Process audio
-    print("\n[2/4] Processing audio...")
+    print("\n[2/4] Processing audio with Core ML...")
     let audioFeatures = try generator.processAudio(audioPath: audioPath)
     
     // Limit frames
     let actualFrames = min(numFrames, audioFeatures.count)
     
     // Generate frames
-    print("\n[3/4] Generating video frames...")
+    print("\n[3/4] Generating video frames with Core ML...")
     try generator.generateFrames(
         audioFeatures: audioFeatures,
         numFrames: actualFrames,
