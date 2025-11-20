@@ -213,11 +213,20 @@ class FrameGeneratorIOS {
     
     // MARK: - iOS-specific helper methods (UIImage instead of NSImage)
     
+    private static var cacheHits = 0
+    private static var cacheMisses = 0
+    
     private func imageToMLMultiArrayCached(_ image: UIImage, cacheKey: String, normalize: Bool) throws -> MLMultiArray {
         // Check cache first!
         if let cached = Self.imageTensorCache[cacheKey] {
+            Self.cacheHits += 1
+            if Self.cacheHits % 100 == 0 {
+                print("  Cache: \(Self.cacheHits) hits, \(Self.cacheMisses) misses (\(Self.cacheHits * 100 / (Self.cacheHits + Self.cacheMisses))% hit rate)")
+            }
             return cached
         }
+        
+        Self.cacheMisses += 1
         
         // Convert and cache
         let tensor = try imageToMLMultiArray(image, normalize: normalize)
@@ -424,19 +433,45 @@ class FrameGeneratorIOS {
     private func mlMultiArrayToImage(_ array: MLMultiArray, width: Int, height: Int) throws -> UIImage {
         var pixelData = [UInt8](repeating: 0, count: width * height * 4)
         
-        // FAST: Single-pass conversion with direct pointer access
+        // FASTEST: Use vDSP for SIMD vectorized conversion!
         array.dataPointer.withMemoryRebound(to: Float.self, capacity: 3 * height * width) { floatPtr in
-            // Single loop instead of nested loops!
+            var rFloats = [Float](repeating: 0, count: width * height)
+            var gFloats = [Float](repeating: 0, count: width * height)
+            var bFloats = [Float](repeating: 0, count: width * height)
+            
+            // Copy channels
+            rFloats.withUnsafeMutableBytes { rBytes in
+                rBytes.baseAddress!.copyMemory(from: floatPtr.advanced(by: 2 * width * height), byteCount: width * height * 4)
+            }
+            gFloats.withUnsafeMutableBytes { gBytes in
+                gBytes.baseAddress!.copyMemory(from: floatPtr.advanced(by: 1 * width * height), byteCount: width * height * 4)
+            }
+            bFloats.withUnsafeMutableBytes { bBytes in
+                bBytes.baseAddress!.copyMemory(from: floatPtr.advanced(by: 0 * width * height), byteCount: width * height * 4)
+            }
+            
+            // SIMD vectorized scale + convert
+            var scale: Float = 255.0
+            vDSP_vsmul(rFloats, 1, &scale, &rFloats, 1, vDSP_Length(width * height))
+            vDSP_vsmul(gFloats, 1, &scale, &gFloats, 1, vDSP_Length(width * height))
+            vDSP_vsmul(bFloats, 1, &scale, &bFloats, 1, vDSP_Length(width * height))
+            
+            // SIMD Float→UInt8
+            var rBytes = [UInt8](repeating: 0, count: width * height)
+            var gBytes = [UInt8](repeating: 0, count: width * height)
+            var bBytes = [UInt8](repeating: 0, count: width * height)
+            
+            vDSP_vfixu8(rFloats, 1, &rBytes, 1, vDSP_Length(width * height))
+            vDSP_vfixu8(gFloats, 1, &gBytes, 1, vDSP_Length(width * height))
+            vDSP_vfixu8(bFloats, 1, &bBytes, 1, vDSP_Length(width * height))
+            
+            // Interleave RGBA
             for i in 0..<(width * height) {
-                let b = UInt8(min(255, max(0, floatPtr[0 * width * height + i] * 255)))
-                let g = UInt8(min(255, max(0, floatPtr[1 * width * height + i] * 255)))
-                let r = UInt8(min(255, max(0, floatPtr[2 * width * height + i] * 255)))
-                
-                let pixelIdx = i * 4
-                pixelData[pixelIdx + 0] = r
-                pixelData[pixelIdx + 1] = g
-                pixelData[pixelIdx + 2] = b
-                pixelData[pixelIdx + 3] = 255
+                let idx = i * 4
+                pixelData[idx + 0] = rBytes[i]
+                pixelData[idx + 1] = gBytes[i]
+                pixelData[idx + 2] = bBytes[i]
+                pixelData[idx + 3] = 255
             }
         }
         
