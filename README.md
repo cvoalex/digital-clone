@@ -200,5 +200,78 @@ View the diagrams at [PlantUML Online](http://www.plantuml.com/plantuml/uml/) by
 - **Dependency Injection**: Services use DI pattern for better testability
 - **Code Reuse**: Inheritance and composition for shared functionality
 
+## Frame Generation Implementations
+
+This project includes **4 complete frame generation implementations** with different performance characteristics:
+
+### Performance Comparison (250 frames, 1280x720 output)
+
+| Implementation | FPS | Platform | Python-Free | Best For |
+|----------------|-----|----------|-------------|----------|
+| 🥇 **iOS (Swift)** | **48** | iPhone/iPad | ✅ | Mobile apps |
+| 🥈 macOS (Swift) | 47 | Mac | ✅ | Desktop apps |
+| 🥉 Go Optimized | 21.6 | Any | ✅ | Servers/Cross-platform |
+| Python | 12.6 | Any | ❌ | Research/Development |
+
+### Quick Start
+
+**iOS App:**
+```bash
+# Open in Xcode
+open swift_ios/mels_ios/mels_ios.xcodeproj
+# Build and run on device
+```
+
+**macOS:**
+```bash
+cd swift_inference
+swift build --configuration release
+.build/release/swift-infer --audio demo/talk_hb.wav --frames 250
+```
+
+**Go (Fastest Python-free):**
+```bash
+cd go_optimized
+DYLD_LIBRARY_PATH=/opt/homebrew/lib ./bin/infer \
+  --audio demo/talk_hb.wav --frames 250 --batch 15
+```
+
+**Python (Reference):**
+```bash
+cd python_inference
+python3 generate_frames.py --audio demo/talk_hb.wav --frames 250
+```
+
+### Key Features
+
+**All implementations:**
+- ✅ Process ANY audio file (no precomputed data)
+- ✅ Full audio encoding pipeline (WAV → features)
+- ✅ Real-time capable performance
+- ✅ Production-ready code
+- ✅ Complete documentation
+
+**Platform-specific optimizations:**
+- **iOS/macOS:** Core ML + Neural Engine
+- **Go:** Session pooling (8 parallel ONNX sessions)
+- **Python:** NumPy vectorization
+
+### Documentation
+
+- **[iOS Architecture](docs/ios-architecture.md)** - iOS implementation details
+- **[Go Architecture](docs/go-architecture.md)** - Go optimization strategies
+- **[Frame Generation Guide](docs/FRAME_GENERATION_GUIDE.md)** - Complete guide
+- **[Final Report](docs/FRAME_GENERATION_FINAL_REPORT.md)** - Project summary
+
+### Video Comparisons
+
+All comparison videos in `comparison_results/`:
+- `comparison_final_three.mp4` - Python vs Go vs macOS side-by-side
+- Individual implementation videos available
+
+---
+
 ## Acknowledgements
 This code is based on [Ultralight-Digital-Human](https://github.com/anliyuan/Ultralight-Digital-Human) and [SyncTalk](https://github.com/ZiqiaoPeng/SyncTalk). We thank the authors for their excellent work.
+
+Frame generation implementations developed with optimizations for Python, Go, and Swift/iOS platforms.
