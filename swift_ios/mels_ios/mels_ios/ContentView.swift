@@ -97,23 +97,27 @@ struct ContentView: View {
                     for i in 1...numFrames {
                         group.addTask {
                             do {
-                                guard let roiURL = Bundle.main.url(forResource: "roi_\(i)", withExtension: "jpg"),
-                                      let maskedURL = Bundle.main.url(forResource: "masked_\(i)", withExtension: "jpg"),
-                                      let roiImage = UIImage(contentsOfFile: roiURL.path),
-                                      let maskedImage = UIImage(contentsOfFile: maskedURL.path) else {
-                                    return (i - 1, nil)
-                                }
-                                
+                                    guard let roiURL = Bundle.main.url(forResource: "roi_\(i)", withExtension: "jpg"),
+                                          let maskedURL = Bundle.main.url(forResource: "masked_\(i)", withExtension: "jpg"),
+                                          let fullBodyURL = Bundle.main.url(forResource: "fullbody_\(i)", withExtension: "jpg"),
+                                          let roiImage = UIImage(contentsOfFile: roiURL.path),
+                                          let maskedImage = UIImage(contentsOfFile: maskedURL.path),
+                                          let fullBodyImage = UIImage(contentsOfFile: fullBodyURL.path) else {
+                                        return (i - 1, nil)
+                                    }
+                                    
                                     let audioIdx = min(i - 1, audioFeatures.count - 1)
-                                    let generatedImage = try generator.generateFrame(
+                                    let compositedFrame = try generator.generateFrame(
                                         roiImage: roiImage,
                                         maskedImage: maskedImage,
+                                        fullBodyImage: fullBodyImage,
                                         audioFeatures: audioFeatures[audioIdx],
                                         roiCacheKey: "roi_\(i)",
-                                        maskedCacheKey: "masked_\(i)"
+                                        maskedCacheKey: "masked_\(i)",
+                                        frameIndex: i
                                     )
                                 
-                                return (i - 1, generatedImage)
+                                    return (i - 1, compositedFrame)
                             } catch {
                                 print("Error frame \(i): \(error)")
                                 return (i - 1, nil)

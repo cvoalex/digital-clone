@@ -12,6 +12,11 @@ class FrameGeneratorIOS {
     private let metalDevice: MTLDevice?
     private let metalQueue: MTLCommandQueue?
     private let melProcessor: MelProcessor
+    private let cropRectangles: [String: CropRect]
+    
+    struct CropRect: Codable {
+        let rect: [Int]  // [x1, y1, x2, y2]
+    }
     
     // Cache audio features to avoid reprocessing
     private static var cachedAudioFeatures: [MLMultiArray]?
@@ -43,7 +48,15 @@ class FrameGeneratorIOS {
         // Initialize mel processor
         self.melProcessor = MelProcessor()
         
-        print("✓ Core ML models loaded (Neural Engine + GPU enabled)")
+        // Load crop rectangles
+        guard let cropURL = Bundle.main.url(forResource: "crop_rectangles", withExtension: "json") else {
+            throw NSError(domain: "FrameGenerator", code: 3,
+                        userInfo: [NSLocalizedDescriptionKey: "crop_rectangles.json not found"])
+        }
+        let cropData = try Data(contentsOf: cropURL)
+        self.cropRectangles = try JSONDecoder().decode([String: CropRect].self, from: cropData)
+        
+        print("✓ Core ML models loaded (Neural Engine + GPU + Compositing enabled)")
     }
     
     func processAudio(audioPath: String, maxFrames: Int? = nil) async throws -> [MLMultiArray] {
@@ -166,9 +179,11 @@ class FrameGeneratorIOS {
     func generateFrame(
         roiImage: UIImage,
         maskedImage: UIImage,
+        fullBodyImage: UIImage,
         audioFeatures: MLMultiArray,
         roiCacheKey: String,
-        maskedCacheKey: String
+        maskedCacheKey: String,
+        frameIndex: Int
     ) throws -> UIImage {
         let frameStart = Date()
         
@@ -211,8 +226,17 @@ class FrameGeneratorIOS {
         
         // Convert to image
         let t5 = Date()
-        let generatedImage = try mlMultiArrayToImage(outputArray, width: 320, height: 320)
+        let generatedRegion = try mlMultiArrayToImage(outputArray, width: 320, height: 320)
         Self.timingStats.arrayToImage += Date().timeIntervalSince(t5)
+        
+        // Composite into full frame (like Go/Python do!)
+        let rectKey = String(frameIndex - 1)
+        guard let cropRect = cropRectangles[rectKey] else {
+            throw NSError(domain: "Generator", code: 10,
+                        userInfo: [NSLocalizedDescriptionKey: "No crop rect for frame \(frameIndex)"])
+        }
+        
+        let compositedFrame = try pasteIntoFullFrame(fullBodyImage, generated: generatedRegion, rect: cropRect.rect)
         
         Self.timingStats.frameCount += 1
         
@@ -227,7 +251,46 @@ class FrameGeneratorIOS {
             print("  Array→Image: \(String(format: "%.2f", Self.timingStats.arrayToImage))s (\(String(format: "%.1f", Self.timingStats.arrayToImage/total*100))%)")
         }
         
-        return generatedImage
+        return compositedFrame
+    }
+    
+    private func pasteIntoFullFrame(_ fullFrame: UIImage, generated: UIImage, rect: [Int]) throws -> UIImage {
+        let x1 = rect[0], y1 = rect[1], x2 = rect[2], y2 = rect[3]
+        
+        guard let fullCG = fullFrame.cgImage,
+              let genCG = generated.cgImage else {
+            throw NSError(domain: "Generator", code: 11)
+        }
+        
+        let width = fullCG.width
+        let height = fullCG.height
+        
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw NSError(domain: "Generator", code: 12)
+        }
+        
+        // Draw full frame
+        context.draw(fullCG, in: CGRect(x: 0, y: 0, width: width, height: height))
+        
+        // Paste generated region (with Y-flip for coordinate system)
+        let y1_flipped = height - y2
+        let targetRect = CGRect(x: x1, y: y1_flipped, width: x2 - x1, height: y2 - y1)
+        context.draw(genCG, in: targetRect)
+        
+        guard let resultCG = context.makeImage() else {
+            throw NSError(domain: "Generator", code: 13)
+        }
+        
+        return UIImage(cgImage: resultCG)
     }
     
     // MARK: - iOS-specific helper methods (UIImage instead of NSImage)
