@@ -1,0 +1,27 @@
+{
+  "title": "iOS Implementation Validation Instructions",
+  "description": "Use this reference dataset to validate your iOS implementation",
+  "steps": [
+    "1. Implement mel spectrogram processing on iOS",
+    "2. Load reference_audio.wav and compare your mel output with mel_spectrogram.npy",
+    "3. Implement AudioEncoder model (convert to CoreML)",
+    "4. Compare per-frame outputs with frames/frame_XXXXX_reshaped.npy",
+    "5. Ensure numerical differences are < 1e-4 (accounting for floating point)"
+  ],
+  "files": {
+    "reference_audio.wav": "Original test audio file",
+    "mel_spectrogram.npy": "Reference mel spectrogram output",
+    "mel_windows.npy": "Reference windowed mel features",
+    "audio_features_raw.npy": "Reference AudioEncoder outputs (no padding)",
+    "audio_features_padded.npy": "Reference features with temporal padding",
+    "frames/": "Per-frame features for each video frame",
+    "metadata.json": "Processing metadata",
+    "summary.json": "Dataset summary"
+  },
+  "validation_criteria": {
+    "mel_spectrogram": "Shape: (80, n_frames), Range: [-4, 4]",
+    "audio_features": "Shape: (n_frames, 512), Reasonable range",
+    "frame_features_ave": "Shape: (32, 16, 16) per frame",
+    "numerical_tolerance": "Max difference < 1e-4 (or 1e-3 for mobile)"
+  }
+}

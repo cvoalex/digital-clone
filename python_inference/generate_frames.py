@@ -21,6 +21,9 @@ def load_image_as_tensor(path, normalize=True):
     img = Image.open(path).convert('RGB')
     arr = np.array(img, dtype=np.float32)
     
+    # Convert RGB to BGR (images from video are in BGR)
+    arr = arr[:, :, ::-1]
+    
     # HWC to CHW
     tensor = arr.transpose(2, 0, 1)
     
@@ -34,6 +37,10 @@ def tensor_to_image(tensor):
     # CHW to HWC
     arr = tensor.transpose(1, 2, 0)
     arr = np.clip(arr, 0, 255).astype(np.uint8)
+    
+    # Convert BGR to RGB for PIL
+    arr = arr[:, :, ::-1]
+    
     return Image.fromarray(arr)
 
 def paste_into_frame(full_frame_path, generated, rect):

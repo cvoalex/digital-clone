@@ -1,0 +1,22 @@
+{
+  "dataset": "sanders",
+  "asr": "ave",
+  "format": "onnx",
+  "flattened": true,
+  "generator": {
+    "file": "models/generator.onnx",
+    "sha256": "67048738646b458714ece0a9bff4dcaa24bec9a27d9000f3eefaf4d8015e9e8d"
+  },
+  "audio_encoder": {
+    "included": true,
+    "file": "models/audio_encoder.onnx",
+    "sha256": "8cb32903197668029c12f7d864e98e7e03eac1f07f38379b93624f9529d3cc18",
+    "note": "Included because --include_audio_encoder flag was set (format=onnx)."
+  },
+  "removed": {
+    "training_checkpoint_pth_removed": true,
+    "onnx_removed_in_pth_mode": false,
+    "external_copy_used": false
+  },
+  "notes": "Flattened full distribution (no nested dataset zip). Contents tailored to selected format."
+}

@@ -47,9 +47,9 @@ func SaveImage(path string, img image.Image) error {
 	return nil
 }
 
-// ImageToTensor converts an image to a float32 tensor in CHW format (RGB)
-// Input: image.Image
-// Output: []float32 with shape (3, height, width), normalized to [0, 1]
+// ImageToTensor converts an image to a float32 tensor in CHW format (BGR)
+// Input: image.Image (loaded from JPEG - in RGB)
+// Output: []float32 with shape (3, height, width) in BGR format, normalized to [0, 1]
 func ImageToTensor(img image.Image, normalize bool) []float32 {
 	bounds := img.Bounds()
 	width := bounds.Dx()
@@ -72,10 +72,10 @@ func ImageToTensor(img image.Image, normalize bool) []float32 {
 				bVal /= 255.0
 			}
 
-			// CHW format
-			tensor[0*height*width+y*width+x] = rVal
-			tensor[1*height*width+y*width+x] = gVal
-			tensor[2*height*width+y*width+x] = bVal
+			// CHW format in BGR order (swap R and B)
+			tensor[0*height*width+y*width+x] = bVal  // B
+			tensor[1*height*width+y*width+x] = gVal  // G
+			tensor[2*height*width+y*width+x] = rVal  // R
 		}
 	}
 
@@ -83,16 +83,17 @@ func ImageToTensor(img image.Image, normalize bool) []float32 {
 }
 
 // TensorToImage converts a tensor back to an image
-// Input: []float32 with shape (3, height, width), values 0-255
-// Output: image.Image
+// Input: []float32 with shape (3, height, width) in BGR format, values 0-255
+// Output: image.Image in RGB format
 func TensorToImage(tensor []float32, width, height int) image.Image {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			r := uint8(tensor[0*height*width+y*width+x])
-			g := uint8(tensor[1*height*width+y*width+x])
-			b := uint8(tensor[2*height*width+y*width+x])
+			// Tensor is in BGR format, convert back to RGB
+			b := uint8(tensor[0*height*width+y*width+x])  // B
+			g := uint8(tensor[1*height*width+y*width+x])  // G
+			r := uint8(tensor[2*height*width+y*width+x])  // R
 
 			img.SetRGBA(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
 		}

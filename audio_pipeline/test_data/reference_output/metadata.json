@@ -1,0 +1,31 @@
+{
+  "audio_path": "audio_pipeline/test_data/reference_audio.wav",
+  "mode": "ave",
+  "fps": 25,
+  "n_frames": 47,
+  "mel_shape": [
+    80,
+    161
+  ],
+  "mel_windows_shape": [
+    47,
+    16,
+    80
+  ],
+  "features_shape": [
+    47,
+    512
+  ],
+  "features_padded_shape": [
+    49,
+    512
+  ],
+  "mel_value_range": [
+    -2.8535701894615135,
+    1.8239112048724992
+  ],
+  "features_value_range": [
+    0.0,
+    9.482013702392578
+  ]
+}

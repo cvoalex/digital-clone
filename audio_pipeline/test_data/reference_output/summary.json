@@ -1,0 +1,14 @@
+{
+  "total_frames": 47,
+  "mode": "ave",
+  "fps": 25,
+  "window_shape": [
+    16,
+    512
+  ],
+  "reshaped_shape": [
+    32,
+    16,
+    16
+  ]
+}

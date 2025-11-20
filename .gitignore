@@ -1,33 +1,51 @@
-.github/
-dataset/
-demo/
-memory-bank/
-result/
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pdb
+*.py[cod]
+*$py.class
+*.so
+.Python
 *.egg-info/
-*.log
-*.cache
-*.swp
-*.DS_Store
-*.ipynb_checkpoints
-*.wav
-*.mp3
-*.mp4
-*.avi
-*.mkv
-*.zip
-*.tar.gz
-*.rar
+.pytest_cache/
+*.npy
 *.pth
-.vscode/tasks.json
-*.pyc
-models/
-*.onnx
-*.json
-# all .pyc files
-*.pyc
+*.pth.tar
 
+# Build artifacts
+.build/
+build/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+
+# ONNX Runtime (large binary)
+onnxruntime-*/
+onnxruntime.tgz
+*.dylib
+*.onnx
+
+# Keep specific important files
+!audio_encoder.onnx
+!model/checkpoints/*.pth
+
+# Test outputs
+audio_pipeline/my_audio_output/
+audio_pipeline/test_data/*/frames/
+audio_pipeline_go/go_output/
+audio_pipeline_go/bin/
+audio_pipeline_go/test_data/
+
+# Audio files (large)
+*.wav
+!demo/talk_hb.wav
+
+# Node modules
+node_modules/
+
+# IDE
+.vscode/
+.idea/
