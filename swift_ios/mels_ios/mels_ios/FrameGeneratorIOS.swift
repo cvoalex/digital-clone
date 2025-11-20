@@ -61,12 +61,15 @@ class FrameGeneratorIOS {
         
         // If maxFrames specified, trim audio to needed length (+10% buffer)
         if let maxFrames = maxFrames {
-            // Calculate how many samples we need for maxFrames
-            // 25 fps, 80 mel windows per frame window, 200 hop size
-            let samplesNeeded = Int(Double(maxFrames) * 1.1 * 80.0 * 200.0)
+            // Calculate: maxFrames * 25fps = seconds needed
+            // seconds * 16000 sample rate = samples
+            // Add 20% buffer for windowing
+            let secondsNeeded = Double(maxFrames) / 25.0 * 1.2
+            let samplesNeeded = Int(secondsNeeded * 16000.0)
+            
             if samplesNeeded < samples.count {
                 samples = Array(samples.prefix(samplesNeeded))
-                print("  Trimmed to \(samples.count) samples (for \(maxFrames) frames)")
+                print("  ⚡ Trimmed audio: \(samples.count) samples (for \(maxFrames) frames, was \(samples.count + (samples.count - samplesNeeded)))")
             }
         }
         
