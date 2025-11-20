@@ -6,8 +6,8 @@ import AppKit
 @available(macOS 13.0, *)
 class FrameGeneratorCoreML {
     private let sandersDir: String
-    private let audioEncoderModel: MLModel
-    private let generatorModel: MLModel
+    private let audioEncoderModel: MLModel  // Core ML with CORRECT weights!
+    private let generatorModel: MLModel  // Core ML for fast generation
     private let cropRectangles: [String: CropRect]
     private let melProcessor: MelProcessor
     private let tensorCache: TensorCache
@@ -21,32 +21,20 @@ class FrameGeneratorCoreML {
     init(sandersDir: String) throws {
         self.sandersDir = sandersDir
         
-        print("Loading Core ML models...")
+        print("Loading Core ML models with CORRECT weights...")
         
-        // Load compiled Core ML models
         let config = MLModelConfiguration()
-        
-        // Explicitly request Neural Engine + GPU
-        if #available(macOS 13.0, *) {
-            config.computeUnits = .cpuAndNeuralEngine  // Try Neural Engine first
-        } else {
-            config.computeUnits = .all
-        }
-        
-        config.allowLowPrecisionAccumulationOnGPU = true  // Enable GPU optimizations
-        
-        print("  Requesting compute units: CPU + Neural Engine + GPU")
+        config.computeUnits = .cpuAndNeuralEngine
+        config.allowLowPrecisionAccumulationOnGPU = true
         
         let audioEncoderURL = URL(fileURLWithPath: "AudioEncoder.mlmodelc", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
         let generatorURL = URL(fileURLWithPath: "Generator.mlmodelc", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
         
-        print("  Loading: \(audioEncoderURL.path)")
         self.audioEncoderModel = try MLModel(contentsOf: audioEncoderURL, configuration: config)
-        print("  Audio encoder loaded")
+        print("  ✓ Audio encoder loaded (weights correctly prefixed)")
         
-        print("  Loading: \(generatorURL.path)")
         self.generatorModel = try MLModel(contentsOf: generatorURL, configuration: config)
-        print("  Generator loaded")
+        print("  ✓ Generator loaded (Neural Engine enabled)")
         
         // Try to verify what's actually being used
         if #available(macOS 14.0, *) {
@@ -105,28 +93,16 @@ class FrameGeneratorCoreML {
             // Convert to MLMultiArray shape [1, 1, 80, 16]
             let melArray = try createMLMultiArray(shape: [1, 1, 80, 16], data: flattenMelWindow(melWindow))
             
-            // Run audio encoder
+            // Run Core ML audio encoder (NOW with correct weights!)
             let input = try MLDictionaryFeatureProvider(dictionary: ["mel_spectrogram": melArray])
             let output = try audioEncoderModel.prediction(from: input)
             
-            // Get output (name is var_242 from model)
+            // Get output
             guard let features = output.featureValue(for: "var_242")?.multiArrayValue else {
-                throw NSError(domain: "FrameGenerator", code: 1, 
-                            userInfo: [NSLocalizedDescriptionKey: "Failed to get audio features"])
+                throw NSError(domain: "FrameGenerator", code: 1)
             }
             
-            // FIXME: Core ML audio encoder produces values 200x smaller than ONNX
-            // Scale up to match Go/Python
-            let scaledFeatures = try MLMultiArray(shape: features.shape as [NSNumber], dataType: .float32)
-            features.dataPointer.withMemoryRebound(to: Float.self, capacity: features.count) { srcPtr in
-                scaledFeatures.dataPointer.withMemoryRebound(to: Float.self, capacity: scaledFeatures.count) { dstPtr in
-                    for j in 0..<features.count {
-                        dstPtr[j] = srcPtr[j] * 200.0  // Scale to match ONNX output range
-                    }
-                }
-            }
-            
-            audioFeatures.append(scaledFeatures)
+            audioFeatures.append(features)
             
             if (i + 1) % 100 == 0 {
                 print("  Encoded \(i + 1)/\(numFrames)")
