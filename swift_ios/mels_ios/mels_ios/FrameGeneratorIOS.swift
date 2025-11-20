@@ -377,21 +377,19 @@ class FrameGeneratorIOS {
     private func mlMultiArrayToImage(_ array: MLMultiArray, width: Int, height: Int) throws -> UIImage {
         var pixelData = [UInt8](repeating: 0, count: width * height * 4)
         
+        // FAST: Single-pass conversion with direct pointer access
         array.dataPointer.withMemoryRebound(to: Float.self, capacity: 3 * height * width) { floatPtr in
-            for y in 0..<height {
-                for x in 0..<width {
-                    let pixelIndex = (y * width + x) * 4
-                    let tensorIndex = y * width + x
-                    
-                    let b = UInt8(min(255, max(0, floatPtr[0 * height * width + tensorIndex] * 255)))
-                    let g = UInt8(min(255, max(0, floatPtr[1 * height * width + tensorIndex] * 255)))
-                    let r = UInt8(min(255, max(0, floatPtr[2 * height * width + tensorIndex] * 255)))
-                    
-                    pixelData[pixelIndex + 0] = r
-                    pixelData[pixelIndex + 1] = g
-                    pixelData[pixelIndex + 2] = b
-                    pixelData[pixelIndex + 3] = 255
-                }
+            // Single loop instead of nested loops!
+            for i in 0..<(width * height) {
+                let b = UInt8(min(255, max(0, floatPtr[0 * width * height + i] * 255)))
+                let g = UInt8(min(255, max(0, floatPtr[1 * width * height + i] * 255)))
+                let r = UInt8(min(255, max(0, floatPtr[2 * width * height + i] * 255)))
+                
+                let pixelIdx = i * 4
+                pixelData[pixelIdx + 0] = r
+                pixelData[pixelIdx + 1] = g
+                pixelData[pixelIdx + 2] = b
+                pixelData[pixelIdx + 3] = 255
             }
         }
         
