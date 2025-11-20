@@ -12,6 +12,10 @@ class FrameGeneratorIOS {
     private let metalQueue: MTLCommandQueue?
     private let melProcessor: MelProcessor
     
+    // Cache audio features to avoid reprocessing
+    private static var cachedAudioFeatures: [MLMultiArray]?
+    private static var cachedAudioPath: String?
+    
     init() throws {
         print("Loading Core ML models for iOS...")
         
@@ -39,7 +43,13 @@ class FrameGeneratorIOS {
     }
     
     func processAudio(audioPath: String) throws -> [MLMultiArray] {
-        print("Processing audio from WAV file...")
+        // Check cache first!
+        if let cached = Self.cachedAudioFeatures, Self.cachedAudioPath == audioPath {
+            print("✓ Using cached audio features (\(cached.count) frames)")
+            return cached
+        }
+        
+        print("Processing audio from WAV file (first time - will cache)...")
         let startTime = Date()
         
         // Load WAV
@@ -78,7 +88,11 @@ class FrameGeneratorIOS {
         }
         
         let elapsed = Date().timeIntervalSince(startTime)
-        print("✓ Audio processing complete: \(String(format: "%.2f", elapsed))s")
+        print("✓ Audio processing complete: \(String(format: "%.2f", elapsed))s (cached for next run)")
+        
+        // Cache the results
+        Self.cachedAudioFeatures = audioFeatures
+        Self.cachedAudioPath = audioPath
         
         return audioFeatures
     }
