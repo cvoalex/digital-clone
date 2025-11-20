@@ -3,6 +3,7 @@ import CoreML
 import UIKit
 import Metal
 import Accelerate
+import Accelerate.vImage
 
 @available(iOS 16.0, *)
 class FrameGeneratorIOS {
@@ -247,19 +248,50 @@ class FrameGeneratorIOS {
         let array = try MLMultiArray(shape: [1, 3, height, width] as [NSNumber], dataType: .float32)
         let scale: Float = normalize ? (1.0 / 255.0) : 1.0
         
-        // FAST: Direct pointer without loops!
+        // FASTEST: Use vImage for vectorized SIMD conversion!
         array.dataPointer.withMemoryRebound(to: Float.self, capacity: 3 * height * width) { destPtr in
-            // Convert RGBA to planar BGR in one pass
-            for i in 0..<(width * height) {
-                let pixelIdx = i * 4
-                let r = Float(pixelData[pixelIdx + 0]) * scale
-                let g = Float(pixelData[pixelIdx + 1]) * scale
-                let b = Float(pixelData[pixelIdx + 2]) * scale
+            pixelData.withUnsafeBytes { srcBytes in
+                let srcPtr = srcBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
                 
-                // Write in BGR planar format
-                destPtr[0 * width * height + i] = b
-                destPtr[1 * width * height + i] = g
-                destPtr[2 * width * height + i] = r
+                // Use vImage to convert interleaved RGBA → planar BGR
+                var srcBuffer = vImage_Buffer(
+                    data: UnsafeMutableRawPointer(mutating: srcPtr),
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: width * 4
+                )
+                
+                // Separate R, G, B channels
+                var rDest = [Float](repeating: 0, count: width * height)
+                var gDest = [Float](repeating: 0, count: width * height)
+                var bDest = [Float](repeating: 0, count: width * height)
+                
+                // Convert UInt8 to Float with scaling (SIMD vectorized!)
+                vDSP_vfltu8(srcPtr.advanced(by: 0), 4, &rDest, 1, vDSP_Length(width * height))
+                vDSP_vfltu8(srcPtr.advanced(by: 1), 4, &gDest, 1, vDSP_Length(width * height))
+                vDSP_vfltu8(srcPtr.advanced(by: 2), 4, &bDest, 1, vDSP_Length(width * height))
+                
+                if normalize {
+                    // Vectorized division by 255
+                    var divisor: Float = 255.0
+                    vDSP_vsdiv(rDest, 1, &divisor, &rDest, 1, vDSP_Length(width * height))
+                    vDSP_vsdiv(gDest, 1, &divisor, &gDest, 1, vDSP_Length(width * height))
+                    vDSP_vsdiv(bDest, 1, &divisor, &bDest, 1, vDSP_Length(width * height))
+                }
+                
+                // Copy to MLMultiArray in BGR order
+                bDest.withUnsafeBytes { bBytes in
+                    let bPtr = bBytes.baseAddress!.assumingMemoryBound(to: Float.self)
+                    destPtr.advanced(by: 0).update(from: bPtr, count: width * height)
+                }
+                gDest.withUnsafeBytes { gBytes in
+                    let gPtr = gBytes.baseAddress!.assumingMemoryBound(to: Float.self)
+                    destPtr.advanced(by: width * height).update(from: gPtr, count: width * height)
+                }
+                rDest.withUnsafeBytes { rBytes in
+                    let rPtr = rBytes.baseAddress!.assumingMemoryBound(to: Float.self)
+                    destPtr.advanced(by: 2 * width * height).update(from: rPtr, count: width * height)
+                }
             }
         }
         
