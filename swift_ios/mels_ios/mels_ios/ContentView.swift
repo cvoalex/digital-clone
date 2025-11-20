@@ -104,12 +104,14 @@ struct ContentView: View {
                                     return (i - 1, nil)
                                 }
                                 
-                                let audioIdx = min(i - 1, audioFeatures.count - 1)
-                                let generatedImage = try generator.generateFrame(
-                                    roiImage: roiImage,
-                                    maskedImage: maskedImage,
-                                    audioFeatures: audioFeatures[audioIdx]
-                                )
+                                    let audioIdx = min(i - 1, audioFeatures.count - 1)
+                                    let generatedImage = try generator.generateFrame(
+                                        roiImage: roiImage,
+                                        maskedImage: maskedImage,
+                                        audioFeatures: audioFeatures[audioIdx],
+                                        roiCacheKey: "roi_\(i)",
+                                        maskedCacheKey: "masked_\(i)"
+                                    )
                                 
                                 return (i - 1, generatedImage)
                             } catch {
