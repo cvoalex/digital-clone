@@ -82,15 +82,6 @@ class FrameGeneratorCoreML {
         print("Processing audio: \(audioPath)")
         let startTime = Date()
         
-        // Check if pre-computed features exist (to match Go/Python)
-        let precomputedPath = "\(sandersDir)/aud_ave.npy"
-        if FileManager.default.fileExists(atPath: precomputedPath) {
-            print("  Using pre-computed audio features (matching Go/Python)")
-            return try loadPrecomputedAudioFeatures(precomputedPath)
-        }
-        
-        print("  Running audio encoder...")
-        
         // Load WAV
         let samples = try SimpleWAVLoader.loadWAV(url: URL(fileURLWithPath: audioPath))
         print("  Loaded: \(samples.count) samples")
@@ -124,7 +115,18 @@ class FrameGeneratorCoreML {
                             userInfo: [NSLocalizedDescriptionKey: "Failed to get audio features"])
             }
             
-            audioFeatures.append(features)
+            // FIXME: Core ML audio encoder produces values 200x smaller than ONNX
+            // Scale up to match Go/Python
+            let scaledFeatures = try MLMultiArray(shape: features.shape as [NSNumber], dataType: .float32)
+            features.dataPointer.withMemoryRebound(to: Float.self, capacity: features.count) { srcPtr in
+                scaledFeatures.dataPointer.withMemoryRebound(to: Float.self, capacity: scaledFeatures.count) { dstPtr in
+                    for j in 0..<features.count {
+                        dstPtr[j] = srcPtr[j] * 200.0  // Scale to match ONNX output range
+                    }
+                }
+            }
+            
+            audioFeatures.append(scaledFeatures)
             
             if (i + 1) % 100 == 0 {
                 print("  Encoded \(i + 1)/\(numFrames)")
@@ -223,14 +225,32 @@ class FrameGeneratorCoreML {
             let audioInput = try reshapeAudioFeatures(audioFeatures[audioIdx])
             totalReshapeTime += Date().timeIntervalSince(t4)
             
-            // DEBUG: Check reshaped audio for first frame
-            if i == 1 {
+            // DEBUG: Save audio tensor for first 5 frames
+            if i <= 5 {
+                let debugPath = "\(outputDir)/../debug_audio_swift_frame\(i).bin"
+                let data = Data(bytes: audioInput.dataPointer, count: audioInput.count * MemoryLayout<Float>.size)
+                try? data.write(to: URL(fileURLWithPath: debugPath))
+                print("    DEBUG: Saved audio tensor for frame \(i)")
+            }
+            
+            // DEBUG: Check reshaped audio for frames 1, 2, 3, 50, 100
+            if i == 1 || i == 2 || i == 3 || i == 50 || i == 100 {
                 print()
-                print("Audio tensor DEBUG (frame 1):")
-                print("  Input shape: \(audioFeatures[audioIdx].shape)")
+                print("Audio tensor DEBUG (frame \(i), audioIdx=\(audioIdx)):")
+                print("  Source feature shape: \(audioFeatures[audioIdx].shape)")
+                
+                // Check source features
+                audioFeatures[audioIdx].dataPointer.withMemoryRebound(to: Float.self, capacity: min(10, audioFeatures[audioIdx].count)) { ptr in
+                    print("  Source first 10: ", terminator: "")
+                    for j in 0..<min(10, audioFeatures[audioIdx].count) {
+                        print(String(format: "%.3f ", ptr[j]), terminator: "")
+                    }
+                    print()
+                }
+                
                 print("  Reshaped shape: \(audioInput.shape)")
                 audioInput.dataPointer.withMemoryRebound(to: Float.self, capacity: min(10, audioInput.count)) { ptr in
-                    print("  First 10 values after reshape: ", terminator: "")
+                    print("  Reshaped first 10: ", terminator: "")
                     for j in 0..<min(10, audioInput.count) {
                         print(String(format: "%.3f ", ptr[j]), terminator: "")
                     }
@@ -247,7 +267,26 @@ class FrameGeneratorCoreML {
                 }
                 print("  Non-zero in reshaped: \(nonZero) / \(audioInput.count)")
                 if nonZero == 0 {
-                    print("  ⚠️ CRITICAL: Reshaped audio is all zeros! This causes closed mouth!")
+                    print("  ⚠️ CRITICAL: Reshaped audio is all zeros!")
+                } else if i > 1 {
+                    // Compare with previous frame to see if changing
+                    let prevIdx = max(0, audioIdx - 1)
+                    var isDifferent = false
+                    audioFeatures[audioIdx].dataPointer.withMemoryRebound(to: Float.self, capacity: audioFeatures[audioIdx].count) { currPtr in
+                        audioFeatures[prevIdx].dataPointer.withMemoryRebound(to: Float.self, capacity: audioFeatures[prevIdx].count) { prevPtr in
+                            for j in 0..<audioFeatures[audioIdx].count {
+                                if abs(currPtr[j] - prevPtr[j]) > 0.001 {
+                                    isDifferent = true
+                                    break
+                                }
+                            }
+                        }
+                    }
+                    if !isDifferent {
+                        print("  ⚠️ WARNING: Audio features SAME as previous frame!")
+                    } else {
+                        print("  ✓ Audio features DIFFERENT from previous frame")
+                    }
                 }
                 print()
             }
@@ -266,10 +305,47 @@ class FrameGeneratorCoreML {
                 throw NSError(domain: "Generator", code: 2)
             }
             
+            // DEBUG: Check generator output for frames 1, 2, 3
+            if i <= 3 {
+                print("  Generator output DEBUG (frame \(i)):")
+                print("    Output shape: \(outputArray.shape)")
+                outputArray.dataPointer.withMemoryRebound(to: Float.self, capacity: min(20, outputArray.count)) { ptr in
+                    print("    First 20 output values: ", terminator: "")
+                    for j in 0..<min(20, outputArray.count) {
+                        print(String(format: "%.3f ", ptr[j]), terminator: "")
+                    }
+                    print()
+                }
+                
+                // Check variance in output
+                var sum: Float = 0
+                var sumSq: Float = 0
+                outputArray.dataPointer.withMemoryRebound(to: Float.self, capacity: outputArray.count) { ptr in
+                    for j in 0..<outputArray.count {
+                        sum += ptr[j]
+                        sumSq += ptr[j] * ptr[j]
+                    }
+                }
+                let mean = sum / Float(outputArray.count)
+                let variance = (sumSq / Float(outputArray.count)) - (mean * mean)
+                print("    Output mean: \(String(format: "%.4f", mean)), variance: \(String(format: "%.4f", variance))")
+                
+                if variance < 0.0001 {
+                    print("    ⚠️ WARNING: Very low variance - output might be constant!")
+                }
+            }
+            
             // Convert output to image
             let t6 = Date()
             let generatedImage = try mlMultiArrayToImage(outputArray, width: 320, height: 320)
             totalToImageTime += Date().timeIntervalSince(t6)
+            
+            // DEBUG: Save raw generated image for frame 1
+            if i == 1 {
+                let debugPath = "\(outputDir)/../debug_generated_frame1.jpg"
+                try? saveJPEG(generatedImage, path: debugPath)
+                print("  DEBUG: Saved raw generated image to \(debugPath)")
+            }
             
             // Paste into full frame
             let t7 = Date()

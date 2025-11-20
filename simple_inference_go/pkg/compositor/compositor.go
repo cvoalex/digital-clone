@@ -1,6 +1,7 @@
 package compositor
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -162,6 +163,15 @@ func (c *Compositor) GenerateFrames(
 			audioIdx = len(audioFeats) - 1
 		}
 		audioTensor := reshapeAudioFeatures(audioFeats[audioIdx])
+
+		// DEBUG: Save audio tensor for first 5 frames
+		if i <= 5 {
+			debugPath := filepath.Join(outputDir, "..", fmt.Sprintf("debug_audio_go_frame%d.bin", i))
+			debugFile, _ := os.Create(debugPath)
+			binary.Write(debugFile, binary.LittleEndian, audioTensor)
+			debugFile.Close()
+			fmt.Printf("    DEBUG: Saved audio tensor for frame %d\n", i)
+		}
 
 		// Run inference
 		output, err := c.model.Predict(imageTensor, audioTensor)
