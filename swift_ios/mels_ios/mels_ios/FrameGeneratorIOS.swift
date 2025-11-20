@@ -140,35 +140,69 @@ class FrameGeneratorIOS {
         return audioFeatures
     }
     
+    private static var timingStats = (
+        imageToArray: 0.0,
+        concat: 0.0,
+        reshape: 0.0,
+        inference: 0.0,
+        arrayToImage: 0.0,
+        frameCount: 0
+    )
+    
     func generateFrame(
         roiImage: UIImage,
         maskedImage: UIImage,
         audioFeatures: MLMultiArray
     ) throws -> UIImage {
+        let frameStart = Date()
+        
         // Convert images to MLMultiArrays
+        let t1 = Date()
         let roiArray = try imageToMLMultiArray(roiImage, normalize: true)
         let maskedArray = try imageToMLMultiArray(maskedImage, normalize: true)
+        Self.timingStats.imageToArray += Date().timeIntervalSince(t1)
         
         // Concatenate to 6-channel input
+        let t2 = Date()
         let imageInput = try concatenateArraysMetal(roiArray, maskedArray)
+        Self.timingStats.concat += Date().timeIntervalSince(t2)
         
         // Reshape audio features
+        let t3 = Date()
         let audioInput = try reshapeAudioFeatures(audioFeatures)
+        Self.timingStats.reshape += Date().timeIntervalSince(t3)
         
         // Run generator
+        let t4 = Date()
         let genInput = try MLDictionaryFeatureProvider(dictionary: [
             "visual_input": MLFeatureValue(multiArray: imageInput),
             "audio_input": MLFeatureValue(multiArray: audioInput)
         ])
         
         let output = try generatorModel.prediction(from: genInput)
+        Self.timingStats.inference += Date().timeIntervalSince(t4)
         
         guard let outputArray = output.featureValue(for: "var_1677")?.multiArrayValue else {
             throw NSError(domain: "Generator", code: 2)
         }
         
         // Convert to image
+        let t5 = Date()
         let generatedImage = try mlMultiArrayToImage(outputArray, width: 320, height: 320)
+        Self.timingStats.arrayToImage += Date().timeIntervalSince(t5)
+        
+        Self.timingStats.frameCount += 1
+        
+        // Log every 50 frames
+        if Self.timingStats.frameCount % 50 == 0 {
+            let total = Self.timingStats.imageToArray + Self.timingStats.concat + Self.timingStats.reshape + Self.timingStats.inference + Self.timingStats.arrayToImage
+            print("Timing (\(Self.timingStats.frameCount) frames):")
+            print("  Image→Array: \(String(format: "%.2f", Self.timingStats.imageToArray))s (\(String(format: "%.1f", Self.timingStats.imageToArray/total*100))%)")
+            print("  Concatenate: \(String(format: "%.2f", Self.timingStats.concat))s (\(String(format: "%.1f", Self.timingStats.concat/total*100))%)")
+            print("  Reshape: \(String(format: "%.2f", Self.timingStats.reshape))s (\(String(format: "%.1f", Self.timingStats.reshape/total*100))%)")
+            print("  Inference: \(String(format: "%.2f", Self.timingStats.inference))s (\(String(format: "%.1f", Self.timingStats.inference/total*100))%)")
+            print("  Array→Image: \(String(format: "%.2f", Self.timingStats.arrayToImage))s (\(String(format: "%.1f", Self.timingStats.arrayToImage/total*100))%)")
+        }
         
         return generatedImage
     }
