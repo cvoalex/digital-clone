@@ -435,18 +435,26 @@ class FrameGeneratorIOS {
     private func mlMultiArrayToImage(_ array: MLMultiArray, width: Int, height: Int) throws -> UIImage {
         var pixelData = [UInt8](repeating: 0, count: width * height * 4)
         
-        // FAST: Single-pass conversion
+        // PARALLEL: Process pixels concurrently
+        let totalPixels = width * height
+        let chunkSize = max(1024, totalPixels / 8)  // Process in chunks
+        
         array.dataPointer.withMemoryRebound(to: Float.self, capacity: 3 * height * width) { floatPtr in
-            for i in 0..<(width * height) {
-                let b = UInt8(min(255, max(0, floatPtr[0 * width * height + i] * 255)))
-                let g = UInt8(min(255, max(0, floatPtr[1 * width * height + i] * 255)))
-                let r = UInt8(min(255, max(0, floatPtr[2 * width * height + i] * 255)))
+            DispatchQueue.concurrentPerform(iterations: (totalPixels + chunkSize - 1) / chunkSize) { chunk in
+                let start = chunk * chunkSize
+                let end = min(start + chunkSize, totalPixels)
                 
-                let pixelIdx = i * 4
-                pixelData[pixelIdx + 0] = r
-                pixelData[pixelIdx + 1] = g
-                pixelData[pixelIdx + 2] = b
-                pixelData[pixelIdx + 3] = 255
+                for i in start..<end {
+                    let b = UInt8(min(255, max(0, floatPtr[0 * totalPixels + i] * 255)))
+                    let g = UInt8(min(255, max(0, floatPtr[1 * totalPixels + i] * 255)))
+                    let r = UInt8(min(255, max(0, floatPtr[2 * totalPixels + i] * 255)))
+                    
+                    let pixelIdx = i * 4
+                    pixelData[pixelIdx + 0] = r
+                    pixelData[pixelIdx + 1] = g
+                    pixelData[pixelIdx + 2] = b
+                    pixelData[pixelIdx + 3] = 255
+                }
             }
         }
         
