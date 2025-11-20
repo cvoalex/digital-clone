@@ -10,6 +10,7 @@ class FrameGeneratorIOS {
     private let generatorModel: MLModel
     private let metalDevice: MTLDevice?
     private let metalQueue: MTLCommandQueue?
+    private let melProcessor: MelProcessor
     
     init() throws {
         print("Loading Core ML models for iOS...")
@@ -31,7 +32,55 @@ class FrameGeneratorIOS {
         self.metalDevice = MTLCreateSystemDefaultDevice()
         self.metalQueue = metalDevice?.makeCommandQueue()
         
+        // Initialize mel processor
+        self.melProcessor = MelProcessor()
+        
         print("✓ Core ML models loaded (Neural Engine + GPU enabled)")
+    }
+    
+    func processAudio(audioPath: String) throws -> [MLMultiArray] {
+        print("Processing audio from WAV file...")
+        let startTime = Date()
+        
+        // Load WAV
+        let samples = try SimpleWAVLoader.loadWAV(url: URL(fileURLWithPath: audioPath))
+        print("  Loaded \(samples.count) audio samples")
+        
+        // Process mel spectrogram
+        let melSpec = melProcessor.process(samples)
+        print("  Generated mel spectrogram: \(melSpec.count) x \(melSpec[0].count)")
+        
+        // Get frame count
+        let fps = 25.0
+        let numFrames = melProcessor.getFrameCount(melSpec: melSpec, fps: fps)
+        print("  Detected \(numFrames) frames")
+        
+        // Encode each frame
+        var audioFeatures: [MLMultiArray] = []
+        
+        for i in 0..<numFrames {
+            let melWindow = try melProcessor.cropAudioWindow(melSpec: melSpec, frameIdx: i, fps: fps)
+            let melFlat = flattenMelWindow(melWindow)
+            let melArray = try createMLMultiArray(shape: [1, 1, 80, 16], data: melFlat)
+            
+            let input = try MLDictionaryFeatureProvider(dictionary: ["mel_spectrogram": melArray])
+            let output = try audioEncoderModel.prediction(from: input)
+            
+            guard let features = output.featureValue(for: "var_242")?.multiArrayValue else {
+                throw NSError(domain: "FrameGenerator", code: 2)
+            }
+            
+            audioFeatures.append(features)
+            
+            if (i + 1) % 100 == 0 {
+                print("  Encoded \(i + 1) frames")
+            }
+        }
+        
+        let elapsed = Date().timeIntervalSince(startTime)
+        print("✓ Audio processing complete: \(String(format: "%.2f", elapsed))s")
+        
+        return audioFeatures
     }
     
     func generateFrame(
@@ -216,6 +265,24 @@ class FrameGeneratorIOS {
         }
         
         return UIImage(cgImage: cgImage)
+    }
+    
+    private func flattenMelWindow(_ melWindow: [[Float]]) -> [Float] {
+        var result: [Float] = []
+        for mel in 0..<80 {
+            for frame in 0..<16 {
+                result.append(melWindow[frame][mel])
+            }
+        }
+        return result
+    }
+    
+    private func createMLMultiArray(shape: [Int], data: [Float]) throws -> MLMultiArray {
+        let array = try MLMultiArray(shape: shape as [NSNumber], dataType: .float32)
+        for (index, value) in data.enumerated() {
+            array[index] = NSNumber(value: value)
+        }
+        return array
     }
 }
 
