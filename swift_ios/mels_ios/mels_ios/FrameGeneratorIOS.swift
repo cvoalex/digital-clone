@@ -56,21 +56,28 @@ class FrameGeneratorIOS {
         let startTime = Date()
         
         // Load WAV
-        let samples = try SimpleWAVLoader.loadWAV(url: URL(fileURLWithPath: audioPath))
+        var samples = try SimpleWAVLoader.loadWAV(url: URL(fileURLWithPath: audioPath))
         print("  Loaded \(samples.count) audio samples")
         
-        // Process mel spectrogram
+        // If maxFrames specified, trim audio to needed length (+10% buffer)
+        if let maxFrames = maxFrames {
+            // Calculate how many samples we need for maxFrames
+            // 25 fps, 80 mel windows per frame window, 200 hop size
+            let samplesNeeded = Int(Double(maxFrames) * 1.1 * 80.0 * 200.0)
+            if samplesNeeded < samples.count {
+                samples = Array(samples.prefix(samplesNeeded))
+                print("  Trimmed to \(samples.count) samples (for \(maxFrames) frames)")
+            }
+        }
+        
+        // Process mel spectrogram (now only what we need!)
         let melSpec = melProcessor.process(samples)
         print("  Generated mel spectrogram: \(melSpec.count) x \(melSpec[0].count)")
         
         // Get frame count
         let fps = 25.0
-        let totalFrames = melProcessor.getFrameCount(melSpec: melSpec, fps: fps)
-        
-        // Only encode what we need (+10% buffer for safety)
-        let framesToEncode = maxFrames ?? totalFrames
-        let numFrames = min(Int(Double(framesToEncode) * 1.1), totalFrames)
-        print("  Total available: \(totalFrames) frames, encoding: \(numFrames) frames")
+        let numFrames = melProcessor.getFrameCount(melSpec: melSpec, fps: fps)
+        print("  Will encode: \(numFrames) frames")
         
         // Encode each frame
         var audioFeatures: [MLMultiArray] = []
