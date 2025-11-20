@@ -22,15 +22,35 @@ class FrameGeneratorCoreML {
         
         // Load compiled Core ML models
         let config = MLModelConfiguration()
-        config.computeUnits = .all  // CPU + GPU + Neural Engine!
+        
+        // Explicitly request Neural Engine + GPU
+        if #available(macOS 13.0, *) {
+            config.computeUnits = .cpuAndNeuralEngine  // Try Neural Engine first
+        } else {
+            config.computeUnits = .all
+        }
+        
+        config.allowLowPrecisionAccumulationOnGPU = true  // Enable GPU optimizations
+        
+        print("  Requesting compute units: CPU + Neural Engine + GPU")
         
         let audioEncoderURL = URL(fileURLWithPath: "AudioEncoder.mlmodelc", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
         let generatorURL = URL(fileURLWithPath: "Generator.mlmodelc", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
         
+        print("  Loading: \(audioEncoderURL.path)")
         self.audioEncoderModel = try MLModel(contentsOf: audioEncoderURL, configuration: config)
-        self.generatorModel = try MLModel(contentsOf: generatorURL, configuration: config)
+        print("  Audio encoder loaded")
         
-        print("✓ Core ML models loaded (Neural Engine enabled!)")
+        print("  Loading: \(generatorURL.path)")
+        self.generatorModel = try MLModel(contentsOf: generatorURL, configuration: config)
+        print("  Generator loaded")
+        
+        // Try to verify what's actually being used
+        if #available(macOS 14.0, *) {
+            print("  Model configuration: \(config.computeUnits)")
+        }
+        
+        print("✓ Core ML models loaded")
         
         // Load crop rectangles
         let cropPath = "\(sandersDir)/cache/crop_rectangles.json"
