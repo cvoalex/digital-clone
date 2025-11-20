@@ -87,46 +87,59 @@ struct ContentView: View {
                 let numFrames = 250
                 let audioFeatures = try await generator.processAudio(audioPath: audioURL.path, maxFrames: numFrames)
                 statusMessage = "Audio processed: \(audioFeatures.count) frames"
-                statusMessage = "Generating \(numFrames) frames..."
+                statusMessage = "Generating \(numFrames) frames (parallel)..."
                 let startTime = Date()
                 
-                var frames: [UIImage] = []
+                // Parallel frame generation
+                var frames: [UIImage?] = Array(repeating: nil, count: numFrames)
                 
-                for i in 1...numFrames {
-                    progress = Double(i) / Double(numFrames)
-                    
-                    if i % 25 == 0 {
-                        await MainActor.run {
-                            statusMessage = "Frame \(i)/\(numFrames)..."
+                await withTaskGroup(of: (Int, UIImage?).self) { group in
+                    for i in 1...numFrames {
+                        group.addTask {
+                            do {
+                                guard let roiURL = Bundle.main.url(forResource: "roi_\(i)", withExtension: "jpg"),
+                                      let maskedURL = Bundle.main.url(forResource: "masked_\(i)", withExtension: "jpg"),
+                                      let roiImage = UIImage(contentsOfFile: roiURL.path),
+                                      let maskedImage = UIImage(contentsOfFile: maskedURL.path) else {
+                                    return (i - 1, nil)
+                                }
+                                
+                                let audioIdx = min(i - 1, audioFeatures.count - 1)
+                                let generatedImage = try generator.generateFrame(
+                                    roiImage: roiImage,
+                                    maskedImage: maskedImage,
+                                    audioFeatures: audioFeatures[audioIdx]
+                                )
+                                
+                                return (i - 1, generatedImage)
+                            } catch {
+                                print("Error frame \(i): \(error)")
+                                return (i - 1, nil)
+                            }
+                        }
+                        
+                        if i % 50 == 0 {
+                            await MainActor.run {
+                                statusMessage = "Generating frame \(i)/\(numFrames)..."
+                                progress = Double(i) / Double(numFrames)
+                            }
                         }
                     }
                     
-                    // Load images from bundle
-                    guard let roiURL = Bundle.main.url(forResource: "roi_\(i)", withExtension: "jpg"),
-                          let maskedURL = Bundle.main.url(forResource: "masked_\(i)", withExtension: "jpg"),
-                          let roiImage = UIImage(contentsOfFile: roiURL.path),
-                          let maskedImage = UIImage(contentsOfFile: maskedURL.path) else {
-                        print("Warning: Missing images for frame \(i)")
-                        continue
+                    // Collect results in order
+                    for await (index, image) in group {
+                        frames[index] = image
                     }
-                    
-                    // Generate frame with REAL Core ML
-                    let audioIdx = min(i - 1, audioFeatures.count - 1)
-                    let generatedImage = try generator.generateFrame(
-                        roiImage: roiImage,
-                        maskedImage: maskedImage,
-                        audioFeatures: audioFeatures[audioIdx]
-                    )
-                    
-                    frames.append(generatedImage)
                 }
                 
+                let validFrames = frames.compactMap { $0 }
+                
                 let elapsed = Date().timeIntervalSince(startTime)
-                fps = Double(frames.count) / elapsed
+                fps = Double(validFrames.count) / elapsed
                 
                 await MainActor.run {
-                    generatedFrames = frames
-                    statusMessage = "Complete! \(frames.count) frames at \(String(format: "%.1f", fps)) FPS"
+                    generatedFrames = validFrames
+                    statusMessage = "Complete! \(validFrames.count) frames at \(String(format: "%.1f", fps)) FPS"
                     isProcessing = false
                 }
                 
