@@ -335,11 +335,16 @@ class FrameGeneratorCoreML {
             throw NSError(domain: "Generator", code: 7)
         }
         
-        // Draw full frame
+        // Core Graphics uses bottom-left origin, but our coordinates are top-left
+        // We need to flip the Y coordinate
+        
+        // Draw full frame normally
         context.draw(fullCG, in: CGRect(x: 0, y: 0, width: width, height: height))
         
-        // Draw generated (resized to fit rect)
-        let targetRect = CGRect(x: x1, y: y1, width: x2 - x1, height: y2 - y1)
+        // Draw generated with Y coordinate flipped
+        // Convert top-left coordinates to bottom-left
+        let y1_flipped = height - y2
+        let targetRect = CGRect(x: x1, y: y1_flipped, width: x2 - x1, height: y2 - y1)
         context.draw(genCG, in: targetRect)
         
         guard let resultCG = context.makeImage() else {
