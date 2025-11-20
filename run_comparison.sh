@@ -53,6 +53,7 @@ echo "=========================================="
 echo "Creating Python video..."
 ffmpeg -framerate 25 -i comparison_results/python_output/frames/frame_%05d.jpg \
   -i $AUDIO \
+  -vframes $NUM_FRAMES -shortest \
   -c:v libx264 -c:a aac -crf 20 \
   comparison_results/python_output/video.mp4 -y -loglevel error
 echo "✓ comparison_results/python_output/video.mp4"
@@ -60,6 +61,7 @@ echo "✓ comparison_results/python_output/video.mp4"
 echo "Creating Go video..."
 ffmpeg -framerate 25 -i comparison_results/go_output/frames/frame_%05d.jpg \
   -i $AUDIO \
+  -vframes $NUM_FRAMES -shortest \
   -c:v libx264 -c:a aac -crf 20 \
   comparison_results/go_output/video.mp4 -y -loglevel error
 echo "✓ comparison_results/go_output/video.mp4"
