@@ -304,28 +304,48 @@ class MelProcessor {
     // MARK: - Frame extraction methods
     
     func cropAudioWindow(melSpec: [[Float]], frameIdx: Int, fps: Double) throws -> [[Float]] {
+        // melSpec is [80][time_frames], need to extract window from time dimension
         let startIdx = Int(80.0 * (Double(frameIdx) / fps))
         var endIdx = startIdx + 16
         
-        if endIdx > melSpec.count {
-            endIdx = melSpec.count
+        let timeFrames = melSpec[0].count
+        if endIdx > timeFrames {
+            endIdx = timeFrames
         }
         
-        let window = Array(melSpec[startIdx..<endIdx])
+        // Extract columns startIdx to endIdx from all 80 mel bins
+        var window: [[Float]] = []
+        for melBin in 0..<80 {
+            var frameWindow: [Float] = []
+            for t in startIdx..<endIdx {
+                frameWindow.append(melSpec[melBin][t])
+            }
+            window.append(frameWindow)
+        }
+        
+        // Transpose to get [16][80] format (16 frames, 80 mels each)
+        var transposed: [[Float]] = []
+        for t in 0..<(endIdx - startIdx) {
+            var frame: [Float] = []
+            for melBin in 0..<80 {
+                frame.append(window[melBin][t])
+            }
+            transposed.append(frame)
+        }
         
         // Pad if needed
-        if window.count < 16 {
-            var padded = window
-            for _ in 0..<(16 - window.count) {
-                padded.append([Float](repeating: 0, count: melSpec[0].count))
+        if transposed.count < 16 {
+            for _ in 0..<(16 - transposed.count) {
+                transposed.append([Float](repeating: 0, count: 80))
             }
-            return padded
         }
         
-        return window
+        return transposed
     }
     
     func getFrameCount(melSpec: [[Float]], fps: Double) -> Int {
-        return Int((Double(melSpec.count) - 16.0) / 80.0 * fps) + 2
+        // melSpec is [80][time_frames], we need the time dimension
+        let timeFrames = melSpec[0].count
+        return Int((Double(timeFrames) - 16.0) / 80.0 * fps) + 2
     }
 }
