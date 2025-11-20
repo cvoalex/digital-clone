@@ -82,6 +82,15 @@ class FrameGeneratorCoreML {
         print("Processing audio: \(audioPath)")
         let startTime = Date()
         
+        // Check if pre-computed features exist (to match Go/Python)
+        let precomputedPath = "\(sandersDir)/aud_ave.npy"
+        if FileManager.default.fileExists(atPath: precomputedPath) {
+            print("  Using pre-computed audio features (matching Go/Python)")
+            return try loadPrecomputedAudioFeatures(precomputedPath)
+        }
+        
+        print("  Running audio encoder...")
+        
         // Load WAV
         let samples = try SimpleWAVLoader.loadWAV(url: URL(fileURLWithPath: audioPath))
         print("  Loaded: \(samples.count) samples")
@@ -124,6 +133,40 @@ class FrameGeneratorCoreML {
         
         let elapsed = Date().timeIntervalSince(startTime)
         print("✓ Audio processing: \(String(format: "%.2f", elapsed))s (\(String(format: "%.1f", Double(numFrames)/elapsed)) FPS)")
+        
+        // DEBUG: Check audio features
+        print()
+        print("Audio features DEBUG:")
+        print("  Total frames: \(audioFeatures.count)")
+        if audioFeatures.count > 0 {
+            let first = audioFeatures[0]
+            print("  First frame shape: \(first.shape)")
+            print("  First frame count: \(first.count)")
+            
+            // Check first 10 values
+            first.dataPointer.withMemoryRebound(to: Float.self, capacity: min(10, first.count)) { ptr in
+                print("  First 10 values: ", terminator: "")
+                for i in 0..<min(10, first.count) {
+                    print(String(format: "%.3f ", ptr[i]), terminator: "")
+                }
+                print()
+            }
+            
+            // Check for all zeros
+            var nonZero = 0
+            first.dataPointer.withMemoryRebound(to: Float.self, capacity: first.count) { ptr in
+                for i in 0..<first.count {
+                    if ptr[i] != 0 {
+                        nonZero += 1
+                    }
+                }
+            }
+            print("  Non-zero values: \(nonZero) / \(first.count)")
+            if nonZero == 0 {
+                print("  ⚠️ WARNING: Audio features are all zeros! No audio signal!")
+            }
+        }
+        print()
         
         return audioFeatures
     }
@@ -179,6 +222,35 @@ class FrameGeneratorCoreML {
             let audioIdx = min(i - 1, audioFeatures.count - 1)
             let audioInput = try reshapeAudioFeatures(audioFeatures[audioIdx])
             totalReshapeTime += Date().timeIntervalSince(t4)
+            
+            // DEBUG: Check reshaped audio for first frame
+            if i == 1 {
+                print()
+                print("Audio tensor DEBUG (frame 1):")
+                print("  Input shape: \(audioFeatures[audioIdx].shape)")
+                print("  Reshaped shape: \(audioInput.shape)")
+                audioInput.dataPointer.withMemoryRebound(to: Float.self, capacity: min(10, audioInput.count)) { ptr in
+                    print("  First 10 values after reshape: ", terminator: "")
+                    for j in 0..<min(10, audioInput.count) {
+                        print(String(format: "%.3f ", ptr[j]), terminator: "")
+                    }
+                    print()
+                }
+                
+                var nonZero = 0
+                audioInput.dataPointer.withMemoryRebound(to: Float.self, capacity: audioInput.count) { ptr in
+                    for j in 0..<audioInput.count {
+                        if ptr[j] != 0 {
+                            nonZero += 1
+                        }
+                    }
+                }
+                print("  Non-zero in reshaped: \(nonZero) / \(audioInput.count)")
+                if nonZero == 0 {
+                    print("  ⚠️ CRITICAL: Reshaped audio is all zeros! This causes closed mouth!")
+                }
+                print()
+            }
             
             // Run generator
             let t5 = Date()
