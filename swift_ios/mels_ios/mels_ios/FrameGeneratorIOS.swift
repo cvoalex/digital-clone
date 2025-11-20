@@ -92,7 +92,7 @@ class FrameGeneratorIOS {
         print("  Encoding in parallel...")
         let batchSize = 50
         
-        await withTaskGroup(of: (Int, MLMultiArray).self) { group in
+        await withTaskGroup(of: [(Int, MLMultiArray)].self) { group in
             for batchStart in stride(from: 0, to: numFrames, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, numFrames)
                 
@@ -116,7 +116,7 @@ class FrameGeneratorIOS {
                         }
                     }
                     
-                    return batchResults.isEmpty ? (batchStart, try! MLMultiArray(shape: [1, 512] as [NSNumber], dataType: .float32)) : batchResults[0]
+                    return batchResults  // Return ALL results from batch!
                 }
                 
                 if batchStart % 200 == 0 {
@@ -124,10 +124,12 @@ class FrameGeneratorIOS {
                 }
             }
             
-            // Collect results
-            for await (index, features) in group {
-                if index < numFrames {
-                    audioFeatures[index] = features
+            // Collect ALL results from ALL batches
+            for await batchResults in group {
+                for (index, features) in batchResults {
+                    if index < numFrames {
+                        audioFeatures[index] = features
+                    }
                 }
             }
         }
@@ -136,6 +138,14 @@ class FrameGeneratorIOS {
         
         let elapsed = Date().timeIntervalSince(startTime)
         print("✓ Audio processing complete: \(String(format: "%.2f", elapsed))s (cached for next run)")
+        
+        // DEBUG: Check first 5 audio features
+        print("Audio features check:")
+        for i in 0..<min(5, audioFeatures.count) {
+            audioFeatures[i].dataPointer.withMemoryRebound(to: Float.self, capacity: min(5, audioFeatures[i].count)) { ptr in
+                print("  Feature \(i): \(ptr[0]) \(ptr[1]) \(ptr[2]) \(ptr[3]) \(ptr[4])")
+            }
+        }
         
         // Cache the results
         Self.cachedAudioFeatures = audioFeatures
@@ -161,6 +171,13 @@ class FrameGeneratorIOS {
         maskedCacheKey: String
     ) throws -> UIImage {
         let frameStart = Date()
+        
+        // DEBUG: Check if audio features are changing (first 5 frames)
+        if Self.timingStats.frameCount < 5 {
+            audioFeatures.dataPointer.withMemoryRebound(to: Float.self, capacity: min(10, audioFeatures.count)) { ptr in
+                print("Frame \(Self.timingStats.frameCount + 1) audio: \(ptr[0]) \(ptr[1]) \(ptr[2]) \(ptr[3]) \(ptr[4])")
+            }
+        }
         
         // Convert images to MLMultiArrays (with caching using filename!)
         let t1 = Date()
