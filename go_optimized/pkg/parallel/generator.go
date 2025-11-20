@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/alexanderrusich/go_optimized/pkg/batch"
+	"github.com/alexanderrusich/go_optimized/pkg/cache"
 	ort "github.com/yalue/onnxruntime_go"
 )
 
@@ -23,6 +24,9 @@ type OptimizedGenerator struct {
 	
 	// Batch processor with memory pools
 	batchProcessor *batch.BatchProcessor
+	
+	// Tensor cache (like iOS!)
+	tensorCache *cache.TensorCache
 	
 	// Data
 	cropRectangles map[string]CropRect
@@ -82,10 +86,21 @@ func NewOptimizedGenerator(sandersDir string, batchSize int) (*OptimizedGenerato
 	// Create batch processor
 	bp := batch.NewBatchProcessor(batchSize, numWorkers)
 	
+	// Create tensor cache
+	cacheDir := filepath.Join(sandersDir, "cache/go_tensors")
+	tensorCache, err := cache.NewTensorCache(cacheDir)
+	if err != nil {
+		genPool.Close()
+		audioPool.Close()
+		return nil, fmt.Errorf("failed to create tensor cache: %w", err)
+	}
+	fmt.Println("  ✓ Tensor cache initialized (like iOS!)")
+	
 	return &OptimizedGenerator{
 		audioEncoderPool: audioPool,
 		generatorPool:    genPool,
 		batchProcessor:   bp,
+		tensorCache:      tensorCache,
 		cropRectangles:   rects,
 		sandersDir:       sandersDir,
 	}, nil
@@ -179,24 +194,41 @@ func (g *OptimizedGenerator) processFrame(
 	maskedPath := filepath.Join(g.sandersDir, "model_inputs", fmt.Sprintf("%d.jpg", frameIdx))
 	fullBodyPath := filepath.Join(g.sandersDir, "full_body_img", fmt.Sprintf("%d.jpg", frameIdx))
 	
-	roiImg, err := loadImageFast(roiPath)
-	if err != nil {
-		return err
-	}
-	
-	maskedImg, err := loadImageFast(maskedPath)
-	if err != nil {
-		return err
-	}
-	
 	fullBodyImg, err := loadImageFast(fullBodyPath)
 	if err != nil {
 		return err
 	}
 	
-	// Convert to tensors (reuse tensor6 buffer)
-	imageToTensorBGR(roiImg, tensor6[:1*3*320*320], true)
-	imageToTensorBGR(maskedImg, tensor6[1*3*320*320:], true)
+	// Convert to tensors with caching (like iOS!)
+	roiTensor, err := g.tensorCache.Get(roiPath, func() ([]float32, error) {
+		img, err := loadImageFast(roiPath)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]float32, 1*3*320*320)
+		imageToTensorBGR(img, result, true)
+		return result, nil
+	})
+	if err != nil {
+		return err
+	}
+	
+	maskedTensor, err := g.tensorCache.Get(maskedPath, func() ([]float32, error) {
+		img, err := loadImageFast(maskedPath)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]float32, 1*3*320*320)
+		imageToTensorBGR(img, result, true)
+		return result, nil
+	})
+	if err != nil {
+		return err
+	}
+	
+	// Copy cached tensors to input buffer
+	copy(tensor6[:1*3*320*320], roiTensor)
+	copy(tensor6[1*3*320*320:], maskedTensor)
 	
 	// Get audio features
 	audioIdx := frameIdx - 1
