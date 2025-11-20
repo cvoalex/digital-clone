@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"sync/atomic"
 
 	"github.com/alexanderrusich/go_optimized/pkg/batch"
@@ -18,9 +17,9 @@ import (
 
 // OptimizedGenerator is a highly optimized frame generator
 type OptimizedGenerator struct {
-	// Models
-	audioEncoder *ort.DynamicAdvancedSession
-	generator    *ort.DynamicAdvancedSession
+	// Model session pools for TRUE parallel inference
+	audioEncoderPool *SessionPool
+	generatorPool    *SessionPool
 	
 	// Batch processor with memory pools
 	batchProcessor *batch.BatchProcessor
@@ -31,10 +30,6 @@ type OptimizedGenerator struct {
 	
 	// Statistics
 	framesProcessed atomic.Int64
-	
-	// Thread-safe ONNX sessions (mutex per model)
-	audioMutex sync.Mutex
-	genMutex   sync.Mutex
 }
 
 type CropRect struct {
@@ -51,35 +46,23 @@ func NewOptimizedGenerator(sandersDir string, batchSize int) (*OptimizedGenerato
 	fmt.Printf("  Workers: %d\n", numWorkers)
 	
 	// Initialize ONNX Runtime
-	err := ort.InitializeEnvironment()
-	if err != nil {
-		return nil, fmt.Errorf("failed to init ONNX: %w", err)
-	}
+	ort.InitializeEnvironment() // Ignore error if already initialized
 	
-	// Load models
+	// Load models as session pools (TRUE parallel inference!)
 	audioPath := filepath.Join(sandersDir, "models/audio_encoder.onnx")
 	genPath := filepath.Join(sandersDir, "models/generator.onnx")
 	
-	options, err := ort.NewSessionOptions()
+	// Create session pool for generator (one session per worker)
+	genPool, err := NewSessionPool(genPath, []string{"input", "audio"}, []string{"output"}, numWorkers)
 	if err != nil {
-		return nil, err
-	}
-	defer options.Destroy()
-	
-	// Set thread count for ONNX
-	options.SetIntraOpNumThreads(numWorkers)
-	options.SetInterOpNumThreads(numWorkers)
-	
-	audioSession, err := ort.NewDynamicAdvancedSession(audioPath,
-		[]string{"mel"}, []string{"emb"}, options)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load audio encoder: %w", err)
+		return nil, fmt.Errorf("failed to create generator pool: %w", err)
 	}
 	
-	genSession, err := ort.NewDynamicAdvancedSession(genPath,
-		[]string{"input", "audio"}, []string{"output"}, options)
+	// Audio encoder pool (smaller, audio processing is sequential anyway)
+	audioPool, err := NewSessionPool(audioPath, []string{"mel"}, []string{"emb"}, 2)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load generator: %w", err)
+		genPool.Close()
+		return nil, fmt.Errorf("failed to create audio encoder pool: %w", err)
 	}
 	
 	// Load crop rectangles
@@ -100,11 +83,11 @@ func NewOptimizedGenerator(sandersDir string, batchSize int) (*OptimizedGenerato
 	bp := batch.NewBatchProcessor(batchSize, numWorkers)
 	
 	return &OptimizedGenerator{
-		audioEncoder:   audioSession,
-		generator:      genSession,
-		batchProcessor: bp,
-		cropRectangles: rects,
-		sandersDir:     sandersDir,
+		audioEncoderPool: audioPool,
+		generatorPool:    genPool,
+		batchProcessor:   bp,
+		cropRectangles:   rects,
+		sandersDir:       sandersDir,
 	}, nil
 }
 
@@ -222,10 +205,10 @@ func (g *OptimizedGenerator) processFrame(
 	}
 	reshapeAudioFeatures(audioFeatures[audioIdx], audioTensor)
 	
-	// Run generator (thread-safe)
-	g.genMutex.Lock()
-	output, err := g.runGenerator(tensor6, audioTensor)
-	g.genMutex.Unlock()
+	// Get a generator session from pool (blocks if all busy)
+	session := g.generatorPool.Get()
+	output, err := g.runGeneratorWithSession(session, tensor6, audioTensor)
+	g.generatorPool.Put(session) // Return session to pool
 	
 	if err != nil {
 		return err
@@ -259,8 +242,8 @@ func (g *OptimizedGenerator) processFrame(
 	return nil
 }
 
-// runGenerator runs the generator model
-func (g *OptimizedGenerator) runGenerator(imageTensor, audioTensor []float32) ([]float32, error) {
+// runGeneratorWithSession runs the generator model with a specific session
+func (g *OptimizedGenerator) runGeneratorWithSession(session *ort.DynamicAdvancedSession, imageTensor, audioTensor []float32) ([]float32, error) {
 	imageShape := ort.NewShape(1, 6, 320, 320)
 	audioShape := ort.NewShape(1, 32, 16, 16)
 	outputShape := ort.NewShape(1, 3, 320, 320)
@@ -284,7 +267,7 @@ func (g *OptimizedGenerator) runGenerator(imageTensor, audioTensor []float32) ([
 	}
 	defer outputTensor.Destroy()
 	
-	err = g.generator.Run(
+	err = session.Run(
 		[]ort.Value{imageTensorONNX, audioTensorONNX},
 		[]ort.Value{outputTensor},
 	)
@@ -447,11 +430,11 @@ func reshapeAudioFeatures(features []float32, output []float32) {
 
 // Close releases resources
 func (g *OptimizedGenerator) Close() error {
-	if g.audioEncoder != nil {
-		g.audioEncoder.Destroy()
+	if g.audioEncoderPool != nil {
+		g.audioEncoderPool.Close()
 	}
-	if g.generator != nil {
-		g.generator.Destroy()
+	if g.generatorPool != nil {
+		g.generatorPool.Close()
 	}
 	return nil
 }
