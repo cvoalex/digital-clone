@@ -42,10 +42,13 @@ class FrameGeneratorIOS {
         print("✓ Core ML models loaded (Neural Engine + GPU enabled)")
     }
     
-    func processAudio(audioPath: String) throws -> [MLMultiArray] {
+    func processAudio(audioPath: String, maxFrames: Int? = nil) throws -> [MLMultiArray] {
         // Check cache first!
         if let cached = Self.cachedAudioFeatures, Self.cachedAudioPath == audioPath {
             print("✓ Using cached audio features (\(cached.count) frames)")
+            if let max = maxFrames {
+                return Array(cached.prefix(max))
+            }
             return cached
         }
         
@@ -62,8 +65,12 @@ class FrameGeneratorIOS {
         
         // Get frame count
         let fps = 25.0
-        let numFrames = melProcessor.getFrameCount(melSpec: melSpec, fps: fps)
-        print("  Detected \(numFrames) frames")
+        let totalFrames = melProcessor.getFrameCount(melSpec: melSpec, fps: fps)
+        
+        // Only encode what we need (+10% buffer for safety)
+        let framesToEncode = maxFrames ?? totalFrames
+        let numFrames = min(Int(Double(framesToEncode) * 1.1), totalFrames)
+        print("  Total available: \(totalFrames) frames, encoding: \(numFrames) frames")
         
         // Encode each frame
         var audioFeatures: [MLMultiArray] = []

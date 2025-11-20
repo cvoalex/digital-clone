@@ -78,17 +78,15 @@ struct ContentView: View {
                 statusMessage = "Loading models..."
                 let generator = try FrameGeneratorIOS()
                 
-                // Load audio and process
+                // Load audio and process (only what we need!)
                 statusMessage = "Processing audio..."
                 guard let audioURL = Bundle.main.url(forResource: "talk_hb", withExtension: "wav") else {
                     throw NSError(domain: "App", code: 1, userInfo: [NSLocalizedDescriptionKey: "Audio file not found"])
                 }
                 
-                let audioFeatures = try generator.processAudio(audioPath: audioURL.path)
+                let numFrames = 250
+                let audioFeatures = try generator.processAudio(audioPath: audioURL.path, maxFrames: numFrames)
                 statusMessage = "Audio processed: \(audioFeatures.count) frames"
-                
-                // Generate frames
-                let numFrames = min(250, audioFeatures.count)
                 statusMessage = "Generating \(numFrames) frames..."
                 let startTime = Date()
                 
