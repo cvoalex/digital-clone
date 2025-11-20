@@ -42,7 +42,7 @@ class FrameGeneratorIOS {
         print("✓ Core ML models loaded (Neural Engine + GPU enabled)")
     }
     
-    func processAudio(audioPath: String, maxFrames: Int? = nil) throws -> [MLMultiArray] {
+    func processAudio(audioPath: String, maxFrames: Int? = nil) async throws -> [MLMultiArray] {
         // Check cache first!
         if let cached = Self.cachedAudioFeatures, Self.cachedAudioPath == audioPath {
             print("✓ Using cached audio features (\(cached.count) frames)")
@@ -82,27 +82,53 @@ class FrameGeneratorIOS {
         let numFrames = melProcessor.getFrameCount(melSpec: melSpec, fps: fps)
         print("  Will encode: \(numFrames) frames")
         
-        // Encode each frame
-        var audioFeatures: [MLMultiArray] = []
+        // Encode frames in parallel batches
+        var audioFeatures: [MLMultiArray] = Array(repeating: try MLMultiArray(shape: [1, 512] as [NSNumber], dataType: .float32), count: numFrames)
         
-        for i in 0..<numFrames {
-            let melWindow = try melProcessor.cropAudioWindow(melSpec: melSpec, frameIdx: i, fps: fps)
-            let melFlat = flattenMelWindow(melWindow)
-            let melArray = try createMLMultiArray(shape: [1, 1, 80, 16], data: melFlat)
-            
-            let input = try MLDictionaryFeatureProvider(dictionary: ["mel_spectrogram": melArray])
-            let output = try audioEncoderModel.prediction(from: input)
-            
-            guard let features = output.featureValue(for: "var_242")?.multiArrayValue else {
-                throw NSError(domain: "FrameGenerator", code: 2)
+        print("  Encoding in parallel...")
+        let batchSize = 50
+        
+        await withTaskGroup(of: (Int, MLMultiArray).self) { group in
+            for batchStart in stride(from: 0, to: numFrames, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, numFrames)
+                
+                group.addTask {
+                    var batchResults: [(Int, MLMultiArray)] = []
+                    
+                    for i in batchStart..<batchEnd {
+                        do {
+                            let melWindow = try self.melProcessor.cropAudioWindow(melSpec: melSpec, frameIdx: i, fps: fps)
+                            let melFlat = self.flattenMelWindow(melWindow)
+                            let melArray = try self.createMLMultiArray(shape: [1, 1, 80, 16], data: melFlat)
+                            
+                            let input = try MLDictionaryFeatureProvider(dictionary: ["mel_spectrogram": melArray])
+                            let output = try self.audioEncoderModel.prediction(from: input)
+                            
+                            if let features = output.featureValue(for: "var_242")?.multiArrayValue {
+                                batchResults.append((i, features))
+                            }
+                        } catch {
+                            print("Error encoding frame \(i): \(error)")
+                        }
+                    }
+                    
+                    return batchResults.isEmpty ? (batchStart, try! MLMultiArray(shape: [1, 512] as [NSNumber], dataType: .float32)) : batchResults[0]
+                }
+                
+                if batchStart % 200 == 0 {
+                    print("  Dispatched batch \(batchStart)...")
+                }
             }
             
-            audioFeatures.append(features)
-            
-            if (i + 1) % 100 == 0 {
-                print("  Encoded \(i + 1) frames")
+            // Collect results
+            for await (index, features) in group {
+                if index < numFrames {
+                    audioFeatures[index] = features
+                }
             }
         }
+        
+        print("  ✓ Parallel encoding complete")
         
         let elapsed = Date().timeIntervalSince(startTime)
         print("✓ Audio processing complete: \(String(format: "%.2f", elapsed))s (cached for next run)")

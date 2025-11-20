@@ -85,7 +85,7 @@ struct ContentView: View {
                 }
                 
                 let numFrames = 250
-                let audioFeatures = try generator.processAudio(audioPath: audioURL.path, maxFrames: numFrames)
+                let audioFeatures = try await generator.processAudio(audioPath: audioURL.path, maxFrames: numFrames)
                 statusMessage = "Audio processed: \(audioFeatures.count) frames"
                 statusMessage = "Generating \(numFrames) frames..."
                 let startTime = Date()
