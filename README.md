@@ -252,9 +252,25 @@ python3 generate_frames.py --audio demo/talk_hb.wav --frames 250
 - ✅ Complete documentation
 
 **Platform-specific optimizations:**
-- **iOS/macOS:** Core ML + Neural Engine
-- **Go:** Session pooling (8 parallel ONNX sessions)
+- **iOS/macOS:** Core ML + Neural Engine + in-memory tensor caching
+- **Go:** Session pooling (8 parallel ONNX sessions) + disk-based tensor caching
 - **Python:** NumPy vectorization
+
+### Performance Optimization: Tensor Caching
+
+The Go and iOS implementations include automatic tensor caching for significant speedup:
+
+**Go Optimized:**
+- **First run:** Converts images → tensors, saves to `model/sanders_full_onnx/cache/go_tensors/` (~293 MB)
+- **Subsequent runs:** Loads pre-computed tensors from disk (38% faster!)
+- **Performance:** 15.7 FPS → 21.6 FPS with 100% cache hit rate
+
+**iOS/Swift:**
+- **In-memory cache:** Tensors cached in RAM for instant reuse
+- **Performance:** Near-zero conversion time on repeat frames
+- **Result:** Sustained 48 FPS with cached tensors
+
+The cache is created automatically on first run and persists across sessions.
 
 ### Documentation
 
