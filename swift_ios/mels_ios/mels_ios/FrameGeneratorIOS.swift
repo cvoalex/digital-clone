@@ -17,6 +17,9 @@ class FrameGeneratorIOS {
     private static var cachedAudioFeatures: [MLMultiArray]?
     private static var cachedAudioPath: String?
     
+    // Cache converted image tensors (HUGE speedup!)
+    private static var imageTensorCache: [String: MLMultiArray] = [:]
+    
     init() throws {
         print("Loading Core ML models for iOS...")
         
@@ -157,10 +160,10 @@ class FrameGeneratorIOS {
     ) throws -> UIImage {
         let frameStart = Date()
         
-        // Convert images to MLMultiArrays
+        // Convert images to MLMultiArrays (with caching!)
         let t1 = Date()
-        let roiArray = try imageToMLMultiArray(roiImage, normalize: true)
-        let maskedArray = try imageToMLMultiArray(maskedImage, normalize: true)
+        let roiArray = try imageToMLMultiArrayCached(roiImage, cacheKey: "roi_\(roiImage.hash)", normalize: true)
+        let maskedArray = try imageToMLMultiArrayCached(maskedImage, cacheKey: "masked_\(maskedImage.hash)", normalize: true)
         Self.timingStats.imageToArray += Date().timeIntervalSince(t1)
         
         // Concatenate to 6-channel input
@@ -209,6 +212,18 @@ class FrameGeneratorIOS {
     }
     
     // MARK: - iOS-specific helper methods (UIImage instead of NSImage)
+    
+    private func imageToMLMultiArrayCached(_ image: UIImage, cacheKey: String, normalize: Bool) throws -> MLMultiArray {
+        // Check cache first!
+        if let cached = Self.imageTensorCache[cacheKey] {
+            return cached
+        }
+        
+        // Convert and cache
+        let tensor = try imageToMLMultiArray(image, normalize: normalize)
+        Self.imageTensorCache[cacheKey] = tensor
+        return tensor
+    }
     
     private func imageToMLMultiArray(_ image: UIImage, normalize: Bool) throws -> MLMultiArray {
         guard let cgImage = image.cgImage else {
