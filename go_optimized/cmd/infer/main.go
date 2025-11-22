@@ -109,4 +109,3 @@ func main() {
 	fmt.Printf("    go_optimized.mp4 -y\n")
 	fmt.Println("\n✓ Complete!")
 }
-

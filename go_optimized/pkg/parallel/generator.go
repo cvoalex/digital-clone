@@ -62,8 +62,8 @@ func NewOptimizedGenerator(sandersDir string, batchSize int) (*OptimizedGenerato
 		return nil, fmt.Errorf("failed to create generator pool: %w", err)
 	}
 	
-	// Audio encoder pool (smaller, audio processing is sequential anyway)
-	audioPool, err := NewSessionPool(audioPath, []string{"mel"}, []string{"emb"}, 2)
+	// Audio encoder pool (use 1 session for determinism, audio processing is sequential anyway)
+	audioPool, err := NewSessionPool(audioPath, []string{"mel"}, []string{"emb"}, 1)
 	if err != nil {
 		genPool.Close()
 		return nil, fmt.Errorf("failed to create audio encoder pool: %w", err)
@@ -105,6 +105,7 @@ func NewOptimizedGenerator(sandersDir string, batchSize int) (*OptimizedGenerato
 		sandersDir:       sandersDir,
 	}, nil
 }
+
 
 // ProcessAudioParallel processes audio in parallel batches
 func (g *OptimizedGenerator) ProcessAudioParallel(audioPath string) ([][]float32, error) {
@@ -469,7 +470,7 @@ func pasteIntoFrameFast(fullFrame, generated *image.RGBA, rect []int) *image.RGB
 	output := image.NewRGBA(fullFrame.Bounds())
 	copy(output.Pix, fullFrame.Pix) // Fast copy entire buffer
 	
-	// Resize and paste (simplified nearest neighbor for speed)
+	// Resize and paste using Bilinear Interpolation
 	genWidth := generated.Bounds().Dx()
 	genHeight := generated.Bounds().Dy()
 	targetWidth := x2 - x1
@@ -480,20 +481,43 @@ func pasteIntoFrameFast(fullFrame, generated *image.RGBA, rect []int) *image.RGB
 	
 	for y := 0; y < targetHeight; y++ {
 		for x := 0; x < targetWidth; x++ {
-			// Source coordinates
-			srcX := (x * genWidth) / targetWidth
-			srcY := (y * genHeight) / targetHeight
+			// Map target coordinate to source coordinate
+			srcX := float32(x) * float32(genWidth-1) / float32(targetWidth)
+			srcY := float32(y) * float32(genHeight-1) / float32(targetHeight)
 			
-			if srcX < genWidth && srcY < genHeight {
-				// Direct pixel copy
-				srcIdx := (srcY*genWidth + srcX) * 4
-				dstIdx := ((y1+y)*output.Bounds().Dx() + (x1+x)) * 4
+			xL := int(srcX)
+			yT := int(srcY)
+			xR := xL + 1
+			yB := yT + 1
+			
+			if xR >= genWidth { xR = genWidth - 1 }
+			if yB >= genHeight { yB = genHeight - 1 }
+			
+			alphaX := srcX - float32(xL)
+			alphaY := srcY - float32(yT)
+			
+			// Get 4 neighbor pixels
+			idxTL := (yT*genWidth + xL) * 4
+			idxTR := (yT*genWidth + xR) * 4
+			idxBL := (yB*genWidth + xL) * 4
+			idxBR := (yB*genWidth + xR) * 4
+			
+			// Interpolate each channel
+			dstIdx := ((y1+y)*output.Bounds().Dx() + (x1+x)) * 4
+			
+			for c := 0; c < 3; c++ { // RGB only
+				valTL := float32(genPix[idxTL+c])
+				valTR := float32(genPix[idxTR+c])
+				valBL := float32(genPix[idxBL+c])
+				valBR := float32(genPix[idxBR+c])
 				
-				outPix[dstIdx+0] = genPix[srcIdx+0]
-				outPix[dstIdx+1] = genPix[srcIdx+1]
-				outPix[dstIdx+2] = genPix[srcIdx+2]
-				outPix[dstIdx+3] = 255
+				top := valTL + (valTR-valTL)*alphaX
+				bottom := valBL + (valBR-valBL)*alphaX
+				val := top + (bottom-top)*alphaY
+				
+				outPix[dstIdx+c] = uint8(val)
 			}
+			outPix[dstIdx+3] = 255
 		}
 	}
 	
