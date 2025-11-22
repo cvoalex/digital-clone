@@ -1,7 +1,6 @@
 package parallel
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/alexanderrusich/go_optimized/pkg/batch"
 	"github.com/alexanderrusich/go_optimized/pkg/cache"
+	"github.com/alexanderrusich/go_optimized/pkg/mel"
 	ort "github.com/yalue/onnxruntime_go"
 )
 
@@ -110,39 +110,96 @@ func NewOptimizedGenerator(sandersDir string, batchSize int) (*OptimizedGenerato
 func (g *OptimizedGenerator) ProcessAudioParallel(audioPath string) ([][]float32, error) {
 	fmt.Printf("Processing audio (parallel): %s\n", audioPath)
 	
-	// Load audio (TODO: integrate mel processor)
-	// For now, load from binary if exists
-	binPath := filepath.Join(g.sandersDir, "aud_ave.bin")
+	// Create mel processor
+	melProc := mel.NewProcessor()
 	
-	file, err := os.Open(binPath)
+	// Load and process audio
+	audio, err := melProc.LoadWAV(audioPath)
 	if err != nil {
-		return nil, fmt.Errorf("audio processing not yet implemented, use pre-computed: %w", err)
+		return nil, fmt.Errorf("failed to load audio: %w", err)
 	}
-	defer file.Close()
 	
-	stat, err := file.Stat()
+	// Generate mel spectrogram
+	melSpec, err := melProc.Process(audio)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to process mel: %w", err)
 	}
 	
-	numFloats := int(stat.Size()) / 4
-	data := make([]float32, numFloats)
-	err = binary.Read(file, binary.LittleEndian, data)
-	if err != nil {
-		return nil, err
+	// Calculate number of frames (same logic as Python)
+	melFrames := len(melSpec[0])
+	dataLen := int(float64(melFrames-16)/80.0*float64(25)) + 2
+	
+	fmt.Printf("  Mel spectrogram shape: (%d, %d)\n", len(melSpec), melFrames)
+	fmt.Printf("  Number of frames: %d\n", dataLen)
+	
+	// Process each frame through audio encoder
+	audioFeatures := make([][]float32, dataLen)
+	
+	for idx := 0; idx < dataLen; idx++ {
+		// Crop 16-frame window
+		startIdx := int(80.0 * (float64(idx) / float64(25)))
+		endIdx := startIdx + 16
+		
+		if endIdx > melFrames {
+			endIdx = melFrames
+			startIdx = endIdx - 16
+		}
+		
+		// Extract window and reshape for encoder: (1, 1, 80, 16)
+		melWindow := make([]float32, 1*1*80*16)
+		for melIdx := 0; melIdx < 80; melIdx++ {
+			for frameIdx := 0; frameIdx < 16; frameIdx++ {
+				melWindow[melIdx*16+frameIdx] = float32(melSpec[melIdx][startIdx+frameIdx])
+			}
+		}
+		
+		// Run audio encoder
+		session := g.audioEncoderPool.Get()
+		
+		melShape := ort.NewShape(1, 1, 80, 16)
+		melTensor, err := ort.NewTensor(melShape, melWindow)
+		if err != nil {
+			g.audioEncoderPool.Put(session)
+			return nil, fmt.Errorf("failed to create mel tensor: %w", err)
+		}
+		
+		outputShape := ort.NewShape(1, 512)
+		outputData := make([]float32, 512)
+		outputTensor, err := ort.NewTensor(outputShape, outputData)
+		if err != nil {
+			melTensor.Destroy()
+			g.audioEncoderPool.Put(session)
+			return nil, fmt.Errorf("failed to create output tensor: %w", err)
+		}
+		
+		err = session.Run(
+			[]ort.Value{melTensor},
+			[]ort.Value{outputTensor},
+		)
+		
+		if err != nil {
+			melTensor.Destroy()
+			outputTensor.Destroy()
+			g.audioEncoderPool.Put(session)
+			return nil, fmt.Errorf("audio encoder failed: %w", err)
+		}
+		
+		// Get features
+		features := outputTensor.GetData()
+		audioFeatures[idx] = make([]float32, 512)
+		copy(audioFeatures[idx], features)
+		
+		melTensor.Destroy()
+		outputTensor.Destroy()
+		g.audioEncoderPool.Put(session)
+		
+		if (idx+1)%100 == 0 {
+			fmt.Printf("  Encoded %d/%d frames\n", idx+1, dataLen)
+		}
 	}
 	
-	// Reshape to [num_frames][512]
-	featureSize := 512
-	numFrames := numFloats / featureSize
-	
-	features := make([][]float32, numFrames)
-	for i := 0; i < numFrames; i++ {
-		features[i] = data[i*featureSize : (i+1)*featureSize]
-	}
-	
-	fmt.Printf("  Loaded %d audio feature frames\n", numFrames)
-	return features, nil
+	fmt.Printf("✓ Generated %d audio feature frames\n", len(audioFeatures))
+	return audioFeatures, nil
 }
 
 // GenerateFramesOptimized generates frames with optimizations
