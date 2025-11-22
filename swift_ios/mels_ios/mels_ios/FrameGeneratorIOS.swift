@@ -278,6 +278,9 @@ class FrameGeneratorIOS {
             throw NSError(domain: "Generator", code: 12)
         }
         
+        // CRITICAL: Set interpolation to high (Bicubic) to avoid pixelation
+        context.interpolationQuality = .high
+        
         // Draw full frame
         context.draw(fullCG, in: CGRect(x: 0, y: 0, width: width, height: height))
         

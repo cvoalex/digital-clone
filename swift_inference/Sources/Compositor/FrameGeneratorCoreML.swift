@@ -597,6 +597,9 @@ class FrameGeneratorCoreML {
             throw NSError(domain: "Generator", code: 7)
         }
         
+        // CRITICAL: Set interpolation to high (Bicubic) to avoid pixelation
+        context.interpolationQuality = .high
+        
         // Core Graphics uses bottom-left origin, but our coordinates are top-left
         // We need to flip the Y coordinate
         
