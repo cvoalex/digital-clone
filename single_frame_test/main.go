@@ -47,16 +47,40 @@ func main() {
 	startFrame := flag.Int("start", 1, "Start frame")
 	endFrame := flag.Int("end", 250, "End frame")
 	step := flag.Int("step", 5, "Step size")
-	audioFile := flag.String("audio", "../demo/silence_20s.wav", "Audio file (needs at least 640ms)")
-	sandersDir := flag.String("sanders", "../model/sanders_full_onnx", "Path to sanders dataset")
-	outputDir := flag.String("output", "tests", "Output directory")
+	audioFile := flag.String("audio", "", "Audio file (absolute path)")
+	sandersDir := flag.String("sanders", "", "Path to sanders dataset (absolute path)")
+	outputDir := flag.String("output", "", "Output directory (absolute path)")
 	flag.Parse()
 
-	fmt.Printf("Processing Frames: %d to %d (step %d)\n", *startFrame, *endFrame, *step)
-	fmt.Printf("Audio: %s\n", *audioFile)
-	fmt.Printf("Dataset: %s\n", *sandersDir)
+	// Convert all paths to absolute
+	var err error
+	audioPath := *audioFile
+	if audioPath == "" {
+		audioPath, _ = filepath.Abs("../demo/silence_20s.wav")
+	} else if !filepath.IsAbs(audioPath) {
+		audioPath, _ = filepath.Abs(audioPath)
+	}
 
-	os.MkdirAll(*outputDir, 0755)
+	sandersPath := *sandersDir
+	if sandersPath == "" {
+		sandersPath, _ = filepath.Abs("../model/sanders_full_onnx")
+	} else if !filepath.IsAbs(sandersPath) {
+		sandersPath, _ = filepath.Abs(sandersPath)
+	}
+
+	outPath := *outputDir
+	if outPath == "" {
+		outPath, _ = filepath.Abs("tests")
+	} else if !filepath.IsAbs(outPath) {
+		outPath, _ = filepath.Abs(outPath)
+	}
+
+	fmt.Printf("Processing Frames: %d to %d (step %d)\n", *startFrame, *endFrame, *step)
+	fmt.Printf("Audio: %s\n", audioPath)
+	fmt.Printf("Dataset: %s\n", sandersPath)
+	fmt.Printf("Output: %s\n", outPath)
+
+	os.MkdirAll(outPath, 0755)
 
 	// 1. Initialize ONNX Runtime
 	ort.InitializeEnvironment()
@@ -64,8 +88,8 @@ func main() {
 
 	// 2. Load Models
 	fmt.Println("Loading models...")
-	encoderPath := filepath.Join(*sandersDir, "models/audio_encoder.onnx")
-	generatorPath := filepath.Join(*sandersDir, "models/generator.onnx")
+	encoderPath := filepath.Join(sandersPath, "models/audio_encoder.onnx")
+	generatorPath := filepath.Join(sandersPath, "models/generator.onnx")
 
 	encoderSession, err := createSession(encoderPath, []string{"mel"}, []string{"emb"})
 	if err != nil {
@@ -81,13 +105,13 @@ func main() {
 
 	// 3. Process Audio (Full Pipeline) - ONCE
 	fmt.Println("Processing audio...")
-	melSpec, err := processAudioToMel(*audioFile)
+	melSpec, err := processAudioToMel(audioPath)
 	if err != nil {
 		log.Fatalf("Audio processing failed: %v", err)
 	}
 
 	// Load crop rects - ONCE
-	rectsFile, _ := os.Open(filepath.Join(*sandersDir, "cache/crop_rectangles.json"))
+	rectsFile, _ := os.Open(filepath.Join(sandersPath, "cache/crop_rectangles.json"))
 	defer rectsFile.Close()
 	var rects map[string]CropRect
 	json.NewDecoder(rectsFile).Decode(&rects)
@@ -126,9 +150,9 @@ func main() {
 		}
 
 		// 5. Load and Prepare Images
-		roiPath := filepath.Join(*sandersDir, "rois_320", fmt.Sprintf("%d.jpg", frameNum))
-		maskedPath := filepath.Join(*sandersDir, "model_inputs", fmt.Sprintf("%d.jpg", frameNum))
-		fullBodyPath := filepath.Join(*sandersDir, "full_body_img", fmt.Sprintf("%d.jpg", frameNum))
+		roiPath := filepath.Join(sandersPath, "rois_320", fmt.Sprintf("%d.jpg", frameNum))
+		maskedPath := filepath.Join(sandersPath, "model_inputs", fmt.Sprintf("%d.jpg", frameNum))
+		fullBodyPath := filepath.Join(sandersPath, "full_body_img", fmt.Sprintf("%d.jpg", frameNum))
 
 		roiTensor, err := loadImageToTensor(roiPath)
 		if err != nil {
@@ -173,8 +197,8 @@ func main() {
 		finalImg := pasteBilinear(fullBodyRGBA, mouthImg, cropRect.Rect)
 
 		// 8. Save Output
-		outPath := filepath.Join(*outputDir, fmt.Sprintf("frame_%05d.jpg", frameNum))
-		outFile, err := os.Create(outPath)
+		outFilePath := filepath.Join(outPath, fmt.Sprintf("frame_%05d.jpg", frameNum))
+		outFile, err := os.Create(outFilePath)
 		if err != nil {
 			log.Fatal(err)
 		}
