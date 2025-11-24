@@ -108,25 +108,59 @@ This stage runs in **parallel batches** (default batch size: 15 frames).
 
 ---
 
-## Data Flow Summary
+## 4. Detailed Data Specifications
+
+### A. Audio Processing Flow
+
+| Step | Input Data | Operation | Output Data | Notes |
+|------|------------|-----------|-------------|-------|
+| **1. Raw Audio** | `WAV File` | `Decode` | `[]float64` | PCM 16kHz, Mono, normalized `[-1.0, 1.0]` |
+| **2. Spectrogram** | `[]float64` | `STFT + Mel` | `[80, T]` Matrix | 80 Mel bands, ~50 frames/sec. Log scale dB. Normalized `[-4.0, 4.0]`. |
+| **3. Encoder Input** | `[80, T]` | `Windowing` | `[1, 1, 80, 16]` | Sliding window of 16 frames (~320ms context). |
+| **4. Embedding** | `[1, 1, 80, 16]` | `AudioEncoder` | `[1, 512]` | 512-dim feature vector representing mouth shape state. |
+| **5. Gen Input** | `[1, 512]` | `Tile + Reshape` | `[1, 32, 16, 16]` | Tiled 16 times to match U-Net bottleneck spatial dims. |
+
+### B. Visual Processing Flow
+
+| Step | Input Data | Operation | Output Data | Notes |
+|------|------------|-----------|-------------|-------|
+| **1. Template** | `JPEG File` | `Decode` | `image.RGBA` | 320x320 pixels, RGB interleaved. |
+| **2. ROI Tensor** | `image.RGBA` | `Convert` | `[3, 320, 320]` | **BGR Planar**. Normalized `[0.0, 1.0]`. |
+| **3. Masked Tensor** | `image.RGBA` | `Convert` | `[3, 320, 320]` | **BGR Planar**. Normalized `[0.0, 1.0]`. |
+| **4. Model Input** | ROI + Masked | `Concatenate` | `[1, 6, 320, 320]` | 6 channels stacked. BGR ordering maintained. |
+
+### C. Generator Flow
+
+| Step | Input Data | Operation | Output Data | Notes |
+|------|------------|-----------|-------------|-------|
+| **1. Inference** | Visual `[1, 6, 320, 320]`<br>Audio `[1, 32, 16, 16]` | `U-Net Model` | `[1, 3, 320, 320]` | Generates only the mouth region. BGR Planar. Output `[0.0, 1.0]`. |
+| **2. To Image** | `[1, 3, 320, 320]` | `Scale + Shuffle` | `image.RGBA` | Scale to `[0, 255]`. Shuffle Planar BGR → Interleaved RGB. |
+| **3. Resize** | `320x320 Image` | **`Bilinear`** | `Target Size` | E.g., 180x180. Smooth resizing to prevent pixelation. |
+| **4. Paste** | `Full Frame` + `Mouth` | `Composite` | `Final Frame` | Overwrites pixels in full body frame at target coordinates. |
+
+---
+
+## Data Flow Diagram
 
 ```mermaid
 graph TD
-    A[Audio WAV] -->|Mel Processor| B[Mel Spectrogram]
-    B -->|Windowing| C[ONNX Audio Encoder]
-    C -->|512 Features| D[Audio Tensor 32x16x16]
-    
-    E[Template ROI] -->|Cache/Convert| F[Visual Tensor 6x320x320]
-    G[Template Masked] -->|Cache/Convert| F
-    
-    D --> H{ONNX Generator U-Net}
-    F --> H
-    
-    H -->|Output Tensor| I[Generated Mouth 320x320]
-    I -->|Bilinear Resize| J[Resized Mouth]
-    
-    K[Full Body Frame] --> L[Compositor]
-    J --> L
-    L --> M[Final JPEG]
-```
+    subgraph Audio Processing
+    A[Audio WAV<br>16kHz PCM] -->|STFT + Mel Filter| B[Mel Spectrogram<br>80 x T<br>Range: -4.0 to 4.0]
+    B -->|Windowing 16 frames| C[Encoder Input<br>1x1x80x16]
+    C -->|AudioEncoder.onnx| D[Features<br>1x512]
+    D -->|Tile & Reshape| E[U-Net Audio Input<br>1x32x16x16]
+    end
 
+    subgraph Video Processing
+    F[ROI Image<br>320x320 RGB] -->|RGB->BGR<br>Normalize 0-1| G[ROI Tensor<br>3x320x320]
+    H[Masked Image<br>320x320 RGB] -->|RGB->BGR<br>Normalize 0-1| I[Masked Tensor<br>3x320x320]
+    G & I -->|Concatenate| J[U-Net Visual Input<br>1x6x320x320]
+    end
+
+    subgraph Generation
+    E & J -->|Generator.onnx| K[Output Tensor<br>1x3x320x320<br>BGR Planar]
+    K -->|BGR->RGB<br>Scale 0-255| L[Mouth Image<br>320x320]
+    L -->|Bilinear Interpolation| M[Resized Mouth<br>Target WxH]
+    N[Full Body Frame<br>1280x720] & M -->|Composite| O[Final Frame]
+    end
+```
